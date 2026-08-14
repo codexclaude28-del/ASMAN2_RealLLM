@@ -78,6 +78,12 @@ tailwind.config = {
       </div>
     </div>
 
+    <!-- 网络拓扑（SVG 地铁图） -->
+    <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-3">网络拓扑</h2>
+    <div class="bg-gray-900 rounded-xl p-4 border border-gray-800 mb-6 overflow-x-auto">
+      <svg id="network-svg" width="100%" height="520" viewBox="0 0 920 520" class="min-w-[720px]"></svg>
+    </div>
+
     <!-- 活跃任务列表 -->
     <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-3">活跃任务</h2>
     <div id="active-tasks-list" class="space-y-3">
@@ -529,9 +535,73 @@ async function loadTopology() {
   try {
     const res = await fetch(API + '/api/topology');
     window._topology = await res.json();
+    renderNetworkSVG();
   } catch (e) {
     console.warn('拓扑加载失败', e);
   }
+}
+
+// ========== SVG 空间地铁图 ==========
+function renderNetworkSVG() {
+  const topo = window._topology;
+  const svg = document.getElementById('network-svg');
+  if (!svg) return;
+  if (!topo || !topo.lines || !topo.lines.length) { svg.innerHTML = ''; return; }
+
+  const COLORS = ['#f59e0b','#8b5cf6','#3b82f6','#10b981','#f97316','#ec4899','#14b8a6','#f43f5e'];
+  const lineGap = 78, stationGap = 128, originX = 150, originY = 46;
+
+  // 站点坐标
+  const pos = {};
+  topo.lines.forEach((line, li) => {
+    const y = originY + li * lineGap;
+    line.stations.forEach((sc, si) => { pos[sc.id] = { x: originX + si * stationGap, y, sc }; });
+  });
+
+  let c = '';
+
+  // 换乘连线（虚线）：transfer 站 → 下一线首个 alight 站
+  topo.itinerary.forEach((seg, i) => {
+    if (i >= topo.itinerary.length - 1 || !seg.transfer) return;
+    const from = pos[seg.transfer];
+    const to = pos[(topo.itinerary[i + 1].alight || [])[0]];
+    if (from && to) {
+      c += `<line x1="${from.x}" y1="${from.y}" x2="${to.x}" y2="${to.y}" stroke="#4b5563" stroke-width="2" stroke-dasharray="6,5"/>`;
+    }
+  });
+
+  // 线路
+  topo.lines.forEach((line, li) => {
+    const y = originY + li * lineGap;
+    const x1 = originX, x2 = originX + (line.stations.length - 1) * stationGap;
+    c += `<line x1="${x1}" y1="${y}" x2="${x2}" y2="${y}" stroke="${COLORS[li % COLORS.length]}" stroke-width="4" opacity="0.6" stroke-linecap="round"/>`;
+    c += `<text x="${originX - 122}" y="${y + 4}" fill="${COLORS[li % COLORS.length]}" font-size="13" font-weight="600">${line.name}</text>`;
+  });
+
+  // 站点
+  Object.entries(pos).forEach(([id, p]) => {
+    const sc = p.sc;
+    const r = sc.is_hub ? 11 : (sc.slice ? 9 : 6);
+    const fill = sc.is_hub ? '#6b7280' : (sc.slice ? '#6366f1' : '#374151');
+    c += `<circle cx="${p.x}" cy="${p.y}" r="${r}" fill="${fill}" stroke="#9ca3af" stroke-width="1.5"/>`;
+    c += `<text x="${p.x}" y="${p.y + (sc.is_hub ? 22 : 18)}" fill="#9ca3af" font-size="10" text-anchor="middle">${id}</text>`;
+    if (sc.waiting > 0) {
+      c += `<text x="${p.x}" y="${p.y - 13}" fill="#fbbf24" font-size="9" text-anchor="middle">${sc.waiting}</text>`;
+    }
+  });
+
+  // 图例
+  const ly = originY + topo.lines.length * lineGap + 6;
+  c += `<circle cx="${originX}" cy="${ly}" r="6" fill="#374151" stroke="#9ca3af"/>` +
+    `<text x="${originX + 14}" y="${ly + 4}" fill="#9ca3af" font-size="10">普通站</text>` +
+    `<circle cx="${originX + 80}" cy="${ly}" r="9" fill="#6366f1" stroke="#9ca3af"/>` +
+    `<text x="${originX + 94}" y="${ly + 4}" fill="#9ca3af" font-size="10">切片站</text>` +
+    `<circle cx="${originX + 160}" cy="${ly}" r="11" fill="#6b7280" stroke="#9ca3af"/>` +
+    `<text x="${originX + 176}" y="${ly + 4}" fill="#9ca3af" font-size="10">换乘Hub</text>` +
+    `<line x1="${originX + 260}" y1="${ly}" x2="${originX + 300}" y2="${ly}" stroke="#4b5563" stroke-dasharray="6,5"/>` +
+    `<text x="${originX + 308}" y="${ly + 4}" fill="#9ca3af" font-size="10">换乘</text>`;
+
+  svg.innerHTML = c;
 }
 
 // ========== 加载产物 ==========
