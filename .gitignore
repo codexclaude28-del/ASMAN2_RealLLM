@@ -32,3 +32,4 @@ build/
 Thumbs.db
 *.db-shm
 *.db-wal
+artifacts/

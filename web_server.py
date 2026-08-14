@@ -191,6 +191,27 @@ async def get_task_events(task_id: str):
     return {"events": engine.get_events(task_id)}
 
 
+@app.get("/api/tasks/{task_id}/artifacts")
+async def list_artifacts(task_id: str):
+    """列出任务已落地的产物文件"""
+    if not engine:
+        return {"artifacts": []}
+    return {"artifacts": engine.get_artifacts(task_id)}
+
+
+@app.get("/api/tasks/{task_id}/artifacts/{name}")
+async def download_artifact(task_id: str, name: str):
+    """下载单个产物文件"""
+    if not engine:
+        raise HTTPException(503, "引擎未就绪")
+    if "/" in name or "\\" in name or ".." in name:
+        raise HTTPException(400, "非法文件名")
+    path = os.path.join(engine.config.artifact_dir, task_id, name)
+    if not os.path.exists(path):
+        raise HTTPException(404, "产物不存在")
+    return FileResponse(path, filename=name)
+
+
 @app.post("/api/tasks/{task_id}/approve")
 async def approve_task(task_id: str):
     """批准挂起的人工门控站点"""

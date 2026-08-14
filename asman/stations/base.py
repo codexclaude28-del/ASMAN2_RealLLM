@@ -75,6 +75,7 @@ class Station:
         self.profile_manager = None
         self.hermes_bridge = None  # Hermes桥接器
         self.metrics = None
+        self.artifact_store = None
 
     async def handle_boarding(self, train):
         available = train.capacity - len(train.passengers)
@@ -261,8 +262,20 @@ class Station:
                 if self.state_layer:
                     self.state_layer.append_event(passenger.passenger_id, "delivered",
                                                   {"station": self.station_id})
+                self._store_artifacts(passenger)
         if self.state_layer:
             self.state_layer.save_passenger(passenger)
+
+    def _store_artifacts(self, passenger):
+        """把产物落地到内容存储层（解决「内容只存 SQLite」的隐患）"""
+        if not self.artifact_store:
+            return
+        for key, value in passenger.baggage.items():
+            if key.startswith("output_") or key.startswith("merged_"):
+                try:
+                    self.artifact_store.save(passenger.passenger_id, key, value)
+                except Exception as e:
+                    logger.warning("产物落地失败 %s: %s", key, e)
 
     def _validate_output(self, result) -> tuple:
         """校验产出是否符合 output_schema（如 {required: [key1, key2]}）"""

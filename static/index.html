@@ -201,6 +201,12 @@ tailwind.config = {
         <div id="event-timeline" class="space-y-1 text-xs font-mono"></div>
       </div>
 
+      <!-- 产物文件（导出） -->
+      <div class="p-4 border-b border-gray-800">
+        <h4 class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">📦 产物文件（已落地）</h4>
+        <div id="artifact-list" class="space-y-1 text-xs"></div>
+      </div>
+
       <!-- 产物标签 -->
       <div class="p-4 border-b border-gray-800">
         <div class="flex gap-2 flex-wrap" id="output-tabs"></div>
@@ -415,6 +421,7 @@ async function openTaskDetail(taskId) {
     updateDetailUI(data);
   } catch(e) {}
   loadEvents(taskId);
+  loadArtifacts(taskId);
 }
 
 // ========== 加载事件轨迹（含回环） ==========
@@ -441,6 +448,25 @@ async function loadEvents(taskId) {
   } catch(e) {}
 }
 
+// ========== 加载产物文件（已落地） ==========
+async function loadArtifacts(taskId) {
+  try {
+    const res = await fetch(API + '/api/tasks/' + taskId + '/artifacts');
+    const data = await res.json();
+    const el = document.getElementById('artifact-list');
+    const artifacts = data.artifacts || [];
+    if (!artifacts.length) { el.innerHTML = '<span class="text-gray-600">暂无产物文件（任务完成前不会落地）</span>'; return; }
+    el.innerHTML = artifacts.map(a => {
+      const size = a.size > 1024 ? (a.size / 1024).toFixed(1) + ' KB' : a.size + ' B';
+      return `<a href="${API}/api/tasks/${taskId}/artifacts/${encodeURIComponent(a.name)}" download
+        class="flex items-center justify-between gap-2 px-3 py-2 rounded-lg bg-gray-800/50 hover:bg-gray-800 border border-gray-700 transition-colors">
+        <span class="text-blue-300 truncate">📄 ${a.name}</span>
+        <span class="text-gray-500 flex-shrink-0">${size}</span>
+      </a>`;
+    }).join('');
+  } catch(e) {}
+}
+
 // ========== WebSocket 连接 ==========
 function connectWS(taskId) {
   if (wsConnection) { wsConnection.close(); }
@@ -457,6 +483,7 @@ function connectWS(taskId) {
       updateDetailUI({status: 'completed', progress: 100, hermes_summary: data.hermes_summary});
       showToast('🎉 任务完成！', 'success');
       loadOutput(taskId);
+      loadArtifacts(taskId);
       setTimeout(refreshDashboard, 1000);
     } else if (data.type === 'error') {
       showToast('⚠️ ' + data.message, 'error');

@@ -33,15 +33,17 @@ from .registry import register_profile
 from .runtime.config import EngineConfig
 from .runtime.logging import get_logger, setup_logging
 from .runtime.metrics import Metrics
+from .runtime.storage import LocalFileStore
 
 logger = get_logger("asman.engine")
 
 
 class AutoDeliverer:
-    """自动交付：收敛后打包乘客行李与执行报告"""
+    """自动交付：收敛后打包乘客行李与执行报告，并落地产物到内容存储层"""
 
-    def __init__(self, metrics: Optional[Metrics] = None):
+    def __init__(self, metrics: Optional[Metrics] = None, artifact_store=None):
         self.metrics = metrics
+        self.artifact_store = artifact_store
 
     async def deliver(self, passenger: Passenger) -> Dict[str, Any]:
         outputs = {
@@ -53,6 +55,18 @@ class AutoDeliverer:
             "execution_time": time.time() - passenger.created_at,
             "baggage": passenger.baggage,  # 业务产物全在行李里
         }
+        # 落地产物到内容存储层（解决「内容只存 SQLite」的隐患）
+        if self.artifact_store:
+            artifacts = {}
+            for key, value in passenger.baggage.items():
+                if key.startswith("output_") or key.startswith("merged_"):
+                    try:
+                        meta = self.artifact_store.save(passenger.passenger_id, key, value)
+                        artifacts[key] = meta
+                    except Exception as e:
+                        logger.warning("产物落地失败 %s: %s", key, e)
+            outputs["artifacts"] = artifacts
+
         passenger.status = PassengerStatus.COMPLETED
         if self.metrics:
             self.metrics.incr("tasks_completed")
@@ -103,7 +117,8 @@ class MetroEngine:
         self.moa_verifier = MoAAggregator(judge=self.judge, num_verifiers=1)
         self.three_tier_loop = ThreeTierLoop(self)
         self.convergence = ConvergenceEngine(None, self.occ)
-        self.deliverer = AutoDeliverer(self.metrics)
+        self.artifact_store = LocalFileStore(self.config.artifact_dir)
+        self.deliverer = AutoDeliverer(self.metrics, self.artifact_store)
 
         # 自愈 + 复盘（真正启动）
         self.self_healing = SelfHealingScheduler(self.network, self.occ, self.dispatcher)
@@ -139,6 +154,7 @@ class MetroEngine:
                 s.moa_verifier = self.moa_verifier
                 s.hermes_bridge = self.hermes_bridge
                 s.metrics = self.metrics
+                s.artifact_store = self.artifact_store
 
     def _infer_required_outputs(self, net_cfg: NetworkConfig) -> list:
         """收敛所需的产物 key：所有切片站的 merged_{station_id}"""
@@ -327,6 +343,10 @@ class MetroEngine:
 
     def get_metrics(self) -> Dict:
         return self.metrics.snapshot()
+
+    def get_artifacts(self, passenger_id: str) -> List[Dict]:
+        """返回某任务已落地的产物清单（文件引用）"""
+        return self.artifact_store.list_artifacts(passenger_id)
 
     def get_topology(self) -> Dict:
         """返回网络拓扑结构（供可视化）：线路/站点/切片/换乘 + 站台繁忙度 + 执行统计"""
