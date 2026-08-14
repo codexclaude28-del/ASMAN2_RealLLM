@@ -1,0 +1,28 @@
+services:
+  web:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - LLM_PROVIDER=${LLM_PROVIDER:-mock}
+      - LLM_API_KEY=${LLM_API_KEY:-}
+      - LLM_BASE_URL=${LLM_BASE_URL:-}
+      - DSN=postgres://asman:asman@db:5432/asman
+      - JWT_SECRET=${JWT_SECRET:-asman-change-me-in-prod}
+    depends_on:
+      - db
+    volumes:
+      - ./artifacts:/app/artifacts
+      - ./asman_users.db:/app/asman_users.db
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_USER=asman
+      - POSTGRES_PASSWORD=asman
+      - POSTGRES_DB=asman
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:

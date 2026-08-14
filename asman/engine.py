@@ -34,6 +34,7 @@ from .runtime.config import EngineConfig
 from .runtime.logging import get_logger, setup_logging
 from .runtime.metrics import Metrics
 from .runtime.storage import LocalFileStore
+from .runtime.queue import LocalTaskQueue
 
 logger = get_logger("asman.engine")
 
@@ -111,14 +112,15 @@ class MetroEngine:
         # Hermes 桥接 + 各模块
         self.hermes_bridge = HermesBridge(self.llm_client)
         self.hermes_bridge.metrics = self.metrics
-        self.state_layer = StateLayer(self.config.state_db)
-        self.skill_library = SkillLibrary(self.config.skill_db)
+        self.state_layer = StateLayer(self.config.state_db, dsn=self.config.dsn or None)
+        self.skill_library = SkillLibrary(self.config.skill_db, dsn=self.config.dsn or None)
         self.skill_evolver = GEPAEvolver(self.skill_library)
         self.moa_verifier = MoAAggregator(judge=self.judge, num_verifiers=1)
         self.three_tier_loop = ThreeTierLoop(self)
         self.convergence = ConvergenceEngine(None, self.occ)
         self.artifact_store = LocalFileStore(self.config.artifact_dir)
         self.deliverer = AutoDeliverer(self.metrics, self.artifact_store)
+        self.task_queue = LocalTaskQueue(self.config.max_concurrent_tasks)  # 预留分布式队列扩展点
 
         # 自愈 + 复盘（真正启动）
         self.self_healing = SelfHealingScheduler(self.network, self.occ, self.dispatcher)

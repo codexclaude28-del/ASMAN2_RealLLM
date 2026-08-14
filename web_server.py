@@ -21,14 +21,16 @@ load_dotenv()
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from pathlib import Path
 
 from asman.engine import MetroEngine
 from asman.runtime.config import EngineConfig, LLMConfig, JudgeConfig, load_yaml
+from asman.runtime.auth import UserStore, create_token, verify_token
 from examples.novel.agents import register_all
 from examples.novel.bootstrapper import NovelBootstrapper
 
@@ -54,11 +56,23 @@ class TaskInfo(BaseModel):
     created_at: float
 
 
+class RegisterRequest(BaseModel):
+    username: str
+    password: str
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
 # ================ 全局状态 ================
 
 engine: Optional[MetroEngine] = None
 active_ws_connections: Dict[str, list] = {}
 task_registry: Dict[str, dict] = {}  # task_id → metadata
+user_store = UserStore(os.getenv("USERS_DB", "asman_users.db"))
+security = HTTPBearer(auto_error=False)
 
 
 # ================ 应用生命周期 ================
@@ -79,6 +93,7 @@ async def lifespan(app: FastAPI):
         judge=JudgeConfig(enabled=True),
         state_db=str(here / "novel_state.db"),
         skill_db=str(here / "novel_skills.db"),
+        dsn=os.getenv("DSN", ""),  # 设了则用 PostgreSQL，否则 SQLite
     )
     register_all()
     engine = MetroEngine(config=config, bootstrapper=NovelBootstrapper())
@@ -105,6 +120,34 @@ async def root():
 
 
 # ================ REST API ================
+
+# ================ 认证 ================
+
+async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """JWT 鉴权依赖（任务接口如需鉴权，加 `user: str = Depends(get_current_user)`）"""
+    if not credentials:
+        raise HTTPException(401, "未认证")
+    username = verify_token(credentials.credentials)
+    if not username:
+        raise HTTPException(401, "令牌无效或已过期")
+    return username
+
+
+@app.post("/api/auth/register")
+async def register(req: RegisterRequest):
+    if len(req.username) < 3 or len(req.password) < 6:
+        raise HTTPException(400, "用户名至少 3 字符，密码至少 6 字符")
+    if not user_store.register(req.username, req.password):
+        raise HTTPException(409, "用户名已存在")
+    return {"username": req.username, "message": "注册成功"}
+
+
+@app.post("/api/auth/login")
+async def login(req: LoginRequest):
+    if not user_store.authenticate(req.username, req.password):
+        raise HTTPException(401, "用户名或密码错误")
+    return {"token": create_token(req.username), "token_type": "bearer", "username": req.username}
+
 
 @app.get("/api/health")
 async def health():

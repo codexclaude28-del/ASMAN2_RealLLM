@@ -35,6 +35,8 @@ class EngineConfig(BaseModel):
     judge: JudgeConfig = Field(default_factory=JudgeConfig)
     state_db: str = "asman_state.db"
     skill_db: str = "asman_skills.db"
+    dsn: str = ""                 # PostgreSQL DSN（postgres://...），空则用 SQLite
     worker_concurrency: int = 5   # 站点处理并发度
     worker_mode: str = "local"    # local | distributed（distributed 预留，未实现）
     artifact_dir: str = "artifacts"  # 产物落地目录（内容存储层）
+    max_concurrent_tasks: int = 3  # 任务并发度（任务队列）
