@@ -1,0 +1,63 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: asman-web
+spec:
+  selector:
+    app: asman-web
+  ports:
+    - port: 8000
+      targetPort: 8000
+  type: LoadBalancer
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: asman-web
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: asman-web
+  template:
+    metadata:
+      labels:
+        app: asman-web
+    spec:
+      containers:
+        - name: web
+          image: asman:latest
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: asman-config
+            - secretRef:
+                name: asman-secret
+          # 产物目录：多副本下建议换成对象存储（S3/OSS），
+          # 这里用 emptyDir 示意（每个副本独立，重启丢失）
+          volumeMounts:
+            - name: artifacts
+              mountPath: /app/artifacts
+      volumes:
+        - name: artifacts
+          emptyDir: {}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: asman-web-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: asman-web
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
