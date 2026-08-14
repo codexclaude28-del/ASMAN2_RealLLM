@@ -195,6 +195,12 @@ tailwind.config = {
         <div id="metro-map" class="space-y-2"></div>
       </div>
 
+      <!-- 事件轨迹（含回环） -->
+      <div class="p-4 border-b border-gray-800">
+        <h4 class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">🧾 事件轨迹（含回环）</h4>
+        <div id="event-timeline" class="space-y-1 text-xs font-mono"></div>
+      </div>
+
       <!-- 产物标签 -->
       <div class="p-4 border-b border-gray-800">
         <div class="flex gap-2 flex-wrap" id="output-tabs"></div>
@@ -408,6 +414,31 @@ async function openTaskDetail(taskId) {
     const data = await res.json();
     updateDetailUI(data);
   } catch(e) {}
+  loadEvents(taskId);
+}
+
+// ========== 加载事件轨迹（含回环） ==========
+async function loadEvents(taskId) {
+  try {
+    const res = await fetch(API + '/api/tasks/' + taskId + '/events');
+    const data = await res.json();
+    const events = (data.events || []).slice().reverse();  // 倒序存 → 正序展示
+    const el = document.getElementById('event-timeline');
+    if (!events.length) { el.innerHTML = '<span class="text-gray-600">暂无事件</span>'; return; }
+    const iconMap = {
+      'created': '🎫', 'station_entered': '🛑', 'backloop': '🔁',
+      'slice_reassembled': '🔀', 'delivered': '✅', 'awaiting_approval': '⏸️',
+      'approved': '👍', 'rejected': '👎'
+    };
+    const colorMap = { 'backloop': 'text-red-400', 'rejected': 'text-red-400', 'delivered': 'text-emerald-400' };
+    el.innerHTML = events.map(e => {
+      const icon = iconMap[e.event_type] || '•';
+      const color = colorMap[e.event_type] || 'text-gray-400';
+      const station = (e.payload && e.payload.station) ||
+        (e.payload && e.payload.from ? e.payload.from + '→' + e.payload.to : '');
+      return `<div class="${color}">${icon} ${e.event_type}${station ? ' @ ' + station : ''}</div>`;
+    }).join('');
+  } catch(e) {}
 }
 
 // ========== WebSocket 连接 ==========
@@ -468,6 +499,13 @@ function updateDetailUI(data) {
 
   // 地铁线路图
   renderMetroMap(data);
+
+  // 高亮 dashboard 地铁图上的乘客旅程路径（已走过→绿、当前→黄）
+  window._selectedTask = {
+    completed_stops: data.completed_stops || [],
+    current_station: data.current_station || ''
+  };
+  renderNetworkSVG();
 
   // 如果完成了，加载产物
   if (status === 'completed') {
@@ -578,16 +616,23 @@ function renderNetworkSVG() {
     c += `<text x="${originX - 122}" y="${y + 4}" fill="${COLORS[li % COLORS.length]}" font-size="13" font-weight="600">${line.name}</text>`;
   });
 
-  // 站点
+  // 站点（含乘客旅程高亮）
+  const sel = window._selectedTask || {};
+  const completed = sel.completed_stops || [];
+  const current = sel.current_station || '';
+
   Object.entries(pos).forEach(([id, p]) => {
     const sc = p.sc;
     const r = sc.is_hub ? 11 : (sc.slice ? 9 : 6);
-    const fill = sc.is_hub ? '#6b7280' : (sc.slice ? '#6366f1' : '#374151');
+    let fill = sc.is_hub ? '#6b7280' : (sc.slice ? '#6366f1' : '#374151');
+    let stroke = '#9ca3af', sw = 1.5;
+    if (completed.includes(id)) { fill = '#059669'; stroke = '#34d399'; sw = 2.5; }  // 已走过 → 绿
+    if (id === current) { fill = '#fbbf24'; stroke = '#fde68a'; sw = 3; }            // 当前站 → 黄
     const rate = ((sc.success_rate || 0) * 100).toFixed(0);
     const tip = `${id}${sc.agent ? ' · ' + sc.agent : ''}\n执行 ${sc.executions || 0} 次 · 成功率 ${rate}% · 成本 $${(sc.cost || 0).toFixed(4)}` +
       (sc.waiting ? '\n站台等待 ' + sc.waiting : '') +
       (sc.slice && sc.active_slices ? '\n切片并行 ' + sc.active_slices + ' 组' : '');
-    c += `<circle cx="${p.x}" cy="${p.y}" r="${r}" fill="${fill}" stroke="#9ca3af" stroke-width="1.5"><title>${tip}</title></circle>`;
+    c += `<circle cx="${p.x}" cy="${p.y}" r="${r}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}"><title>${tip}</title></circle>`;
     c += `<text x="${p.x}" y="${p.y + (sc.is_hub ? 22 : 18)}" fill="#9ca3af" font-size="10" text-anchor="middle">${id}</text>`;
     if (sc.slice && sc.active_slices > 0) {
       c += `<text x="${p.x}" y="${p.y - 13}" fill="#818cf8" font-size="9" font-weight="600" text-anchor="middle">⟳${sc.active_slices}</text>`;
