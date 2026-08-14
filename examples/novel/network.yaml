@@ -1,0 +1,53 @@
+# 小说创作示例：六线地铁网络拓扑
+name: novel_pipeline
+lines:
+  - id: L1
+    name: 灵感线
+    stations:
+      - {id: S1, agent: intent_parser}
+      - {id: S2, agent: brainstorm}
+      - {id: H1, is_hub: true}
+  - id: L2
+    name: 参考线
+    stations:
+      - {id: R1, agent: research_collect}
+      - {id: R2, agent: research_dedup}
+      - {id: R3, agent: research_analyze}
+      - {id: H2, is_hub: true}
+  - id: L3
+    name: 创作线
+    stations:
+      - {id: W1, agent: outline}
+      - {id: W2_SLICE, agent: chapter_slice, slice: true, reassemble_hub: H3}
+      - {id: W3, agent: chapter_write}
+      - {id: W4, agent: polish}
+      - {id: H3, is_hub: true}
+  - id: L4
+    name: 发布线
+    stations:
+      - {id: P1, agent: publish_format}
+      - {id: P2, agent: publish_cover}
+      - {id: P3_SLICE, agent: platform_slice, slice: true, reassemble_hub: H4}
+      - {id: H4, is_hub: true}
+  - id: L5
+    name: 剧本线
+    stations:
+      - {id: D1, agent: script_adapt}
+      - {id: D2, agent: script_dialogue}
+      - {id: D3_SLICE, agent: scene_slice, slice: true, reassemble_hub: H5}
+      - {id: H5, is_hub: true}
+  - id: L6
+    name: 视频线
+    stations:
+      - {id: V1, agent: video_storyboard}
+      - {id: V2, agent: video_voice}
+      - {id: V3, agent: video_compose}
+      - {id: V4, agent: video_distribute}
+      - {id: V_END}
+itinerary:
+  - {line: L1, board: S1, alight: [S2, H1], transfer: H1}
+  - {line: L2, board: H1, alight: [R1, R2, R3, H2], transfer: H2}
+  - {line: L3, board: H2, alight: [W1, W2_SLICE, W3, W4, H3], transfer: H3}
+  - {line: L4, board: H3, alight: [P1, P2, P3_SLICE, H4], transfer: H4}
+  - {line: L5, board: H4, alight: [D1, D2, D3_SLICE, H5], transfer: H5}
+  - {line: L6, board: H5, alight: [V1, V2, V3, V4, V_END]}

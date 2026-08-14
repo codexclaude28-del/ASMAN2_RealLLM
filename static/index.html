@@ -1,0 +1,621 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ASMAN 2.0 - 自治地铁多Agent网络</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = {
+  darkMode: 'class',
+  theme: { extend: {} }
+}
+</script>
+<style>
+  @keyframes metro-ride { 0%{left:-10%} 100%{left:110%} }
+  @keyframes pulse-glow { 0%,100%{box-shadow:0 0 8px rgba(59,130,246,0.4)} 50%{box-shadow:0 0 20px rgba(59,130,246,0.8)} }
+  @keyframes slide-up { from{opacity:0;transform:translateY(10px)} to{opacity:1;transform:translateY(0)} }
+  @keyframes spin-slow { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
+  .metro-train { animation: metro-ride 3s linear infinite; }
+  .station-active { animation: pulse-glow 2s ease-in-out infinite; }
+  .toast-in { animation: slide-up 0.3s ease-out; }
+  .spin-slow { animation: spin-slow 3s linear infinite; }
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: #1f2937; }
+  ::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 3px; }
+</style>
+</head>
+<body class="min-h-screen bg-gray-950 text-gray-100">
+
+<!-- ====== 顶部导航 ====== -->
+<nav class="bg-gray-900 border-b border-gray-800 sticky top-0 z-50">
+  <div class="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <span class="text-2xl">🚇</span>
+      <div>
+        <h1 class="text-lg font-bold text-white tracking-tight">ASMAN <span class="text-blue-400">2.0</span></h1>
+        <p class="text-xs text-gray-500">自治地铁多Agent网络</p>
+      </div>
+    </div>
+    <div class="flex items-center gap-4">
+      <span id="provider-badge" class="px-2 py-1 rounded text-xs font-medium bg-blue-900/50 text-blue-300 border border-blue-800">mock</span>
+      <button onclick="toggleDark()" class="p-2 rounded-lg hover:bg-gray-800 transition-colors" title="切换主题">
+        <span id="theme-icon">☀️</span>
+      </button>
+    </div>
+  </div>
+</nav>
+
+<!-- ====== 主内容区 ====== -->
+<main class="max-w-7xl mx-auto p-4 md:p-6">
+
+  <!-- 标签切换 -->
+  <div class="flex gap-1 mb-6 bg-gray-900 rounded-lg p-1 w-fit">
+    <button onclick="switchTab('dashboard')" id="tab-dashboard" class="px-4 py-2 rounded-md text-sm font-medium transition-colors bg-blue-600 text-white">📊 仪表盘</button>
+    <button onclick="switchTab('create')" id="tab-create" class="px-4 py-2 rounded-md text-sm font-medium transition-colors text-gray-400 hover:text-white">➕ 新建任务</button>
+    <button onclick="switchTab('history')" id="tab-history" class="px-4 py-2 rounded-md text-sm font-medium transition-colors text-gray-400 hover:text-white">📋 任务历史</button>
+  </div>
+
+  <!-- ====== 仪表盘 ====== -->
+  <div id="panel-dashboard">
+    <!-- 统计卡片 -->
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+      <div class="bg-gray-900 rounded-xl p-4 border border-gray-800">
+        <p class="text-xs text-gray-500 mb-1">总任务数</p>
+        <p id="stat-total" class="text-2xl font-bold">0</p>
+      </div>
+      <div class="bg-gray-900 rounded-xl p-4 border border-gray-800">
+        <p class="text-xs text-gray-500 mb-1">运行中</p>
+        <p id="stat-running" class="text-2xl font-bold text-blue-400">0</p>
+      </div>
+      <div class="bg-gray-900 rounded-xl p-4 border border-gray-800">
+        <p class="text-xs text-gray-500 mb-1">已完成</p>
+        <p id="stat-completed" class="text-2xl font-bold text-emerald-400">0</p>
+      </div>
+      <div class="bg-gray-900 rounded-xl p-4 border border-gray-800">
+        <p class="text-xs text-gray-500 mb-1">LLM 成本</p>
+        <p id="stat-cost" class="text-2xl font-bold text-amber-400">$0</p>
+      </div>
+    </div>
+
+    <!-- 活跃任务列表 -->
+    <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-3">活跃任务</h2>
+    <div id="active-tasks-list" class="space-y-3">
+      <div class="bg-gray-900 rounded-xl p-6 border border-gray-800 text-center text-gray-500">
+        <p class="text-4xl mb-2">🚇</p>
+        <p>暂无活跃任务，去创建一个吧</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ====== 新建任务 ====== -->
+  <div id="panel-create" class="hidden">
+    <div class="max-w-2xl mx-auto">
+      <div class="bg-gray-900 rounded-xl border border-gray-800 p-6">
+        <h2 class="text-xl font-bold mb-6 flex items-center gap-2">✍️ 创建创作任务</h2>
+        <form id="create-form" onsubmit="createTask(event)" class="space-y-5">
+          <div>
+            <label class="block text-sm font-medium text-gray-400 mb-2">创作需求 <span class="text-red-400">*</span></label>
+            <textarea id="input-request" rows="3" required
+              class="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-gray-100 placeholder-gray-500 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-colors"
+              placeholder="例如：帮我写一本玄幻小说，主角是废柴少年，获得神秘传承后逆袭..."></textarea>
+          </div>
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label class="block text-sm font-medium text-gray-400 mb-2">标题</label>
+              <input id="input-title" type="text"
+                class="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-gray-100 placeholder-gray-500 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-colors"
+                placeholder="留空自动生成">
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-gray-400 mb-2">题材</label>
+              <select id="input-genre" class="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-gray-100 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none">
+                <option value="">自动推断</option>
+                <option>玄幻</option><option>都市</option><option>科幻</option><option>仙侠</option>
+                <option>历史</option><option>悬疑</option><option>言情</option><option>游戏</option>
+              </select>
+            </div>
+          </div>
+          <div class="grid grid-cols-3 gap-4">
+            <div>
+              <label class="block text-sm font-medium text-gray-400 mb-2">章节数</label>
+              <input id="input-chapters" type="number" value="3" min="1" max="50"
+                class="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-gray-100 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none">
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-gray-400 mb-2">字/章</label>
+              <input id="input-words" type="number" value="1500" min="500" max="10000" step="500"
+                class="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-gray-100 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none">
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-gray-400 mb-2">生成视频</label>
+              <select id="input-video" class="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-gray-100 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none">
+                <option value="true">是</option><option value="false">否</option>
+              </select>
+            </div>
+          </div>
+          <button type="submit" id="btn-create"
+            class="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 rounded-lg transition-colors flex items-center justify-center gap-2">
+            🚇 启动地铁网络
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- ====== 任务历史 ====== -->
+  <div id="panel-history" class="hidden">
+    <div id="history-list" class="space-y-3">
+      <div class="bg-gray-900 rounded-xl p-6 border border-gray-800 text-center text-gray-500">
+        <p>加载中...</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ====== 任务详情弹窗 ====== -->
+  <div id="task-detail-modal" class="hidden fixed inset-0 z-50 flex items-start justify-center pt-10 px-4 bg-black/60 backdrop-blur-sm overflow-y-auto">
+    <div class="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-5xl max-h-[90vh] overflow-y-auto shadow-2xl">
+      <!-- 头部 -->
+      <div class="sticky top-0 bg-gray-900 border-b border-gray-800 rounded-t-2xl p-4 flex items-center justify-between z-10">
+        <div>
+          <h3 id="detail-title" class="text-lg font-bold">任务详情</h3>
+          <p id="detail-subtitle" class="text-xs text-gray-500 mt-0.5"></p>
+        </div>
+        <div class="flex items-center gap-3">
+          <span id="detail-status" class="px-2 py-0.5 rounded text-xs font-medium"></span>
+          <button onclick="document.getElementById('task-detail-modal').classList.add('hidden')"
+            class="p-2 hover:bg-gray-800 rounded-lg transition-colors text-gray-400 hover:text-white text-xl">✕</button>
+        </div>
+      </div>
+
+      <!-- 进度条 -->
+      <div class="px-4 py-3 bg-gray-800/50">
+        <div class="flex items-center justify-between text-xs text-gray-400 mb-1.5">
+          <span id="detail-station">准备中...</span>
+          <span id="detail-percent">0%</span>
+        </div>
+        <div class="w-full bg-gray-700 rounded-full h-2.5 overflow-hidden">
+          <div id="detail-progress-bar" class="bg-gradient-to-r from-blue-500 to-emerald-500 h-full rounded-full transition-all duration-700" style="width:0%"></div>
+        </div>
+        <div class="flex items-center justify-between text-xs text-gray-500 mt-1.5">
+          <span id="detail-fixes"></span>
+          <span id="detail-cost"></span>
+        </div>
+      </div>
+
+      <!-- 地铁线路图 -->
+      <div class="p-4 border-b border-gray-800">
+        <h4 class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">🚇 地铁线路</h4>
+        <div id="metro-map" class="space-y-2"></div>
+      </div>
+
+      <!-- 产物标签 -->
+      <div class="p-4 border-b border-gray-800">
+        <div class="flex gap-2 flex-wrap" id="output-tabs"></div>
+      </div>
+
+      <!-- 产物内容 -->
+      <div class="p-4" id="output-content">
+        <p class="text-gray-500 text-center py-8">任务运行中，完成后可查看产物...</p>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<!-- ====== Toast ====== -->
+<div id="toast" class="hidden fixed bottom-6 right-6 bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 shadow-xl z-50 max-w-sm toast-in"></div>
+
+<script>
+// ========== 全局状态 ==========
+const API = '';
+let currentTaskId = null;
+let wsConnection = null;
+
+// ========== 初始化 ==========
+async function init() {
+  await checkHealth();
+  await refreshDashboard();
+  loadTheme();
+}
+init();
+
+// ========== 主题 ==========
+function loadTheme() {
+  if (localStorage.theme === 'light') {
+    document.documentElement.classList.remove('dark');
+    document.getElementById('theme-icon').textContent = '🌙';
+  }
+}
+function toggleDark() {
+  const html = document.documentElement;
+  const icon = document.getElementById('theme-icon');
+  if (html.classList.contains('dark')) {
+    html.classList.remove('dark');
+    localStorage.theme = 'light';
+    icon.textContent = '🌙';
+  } else {
+    html.classList.add('dark');
+    localStorage.theme = 'dark';
+    icon.textContent = '☀️';
+  }
+}
+
+// ========== 标签切换 ==========
+function switchTab(tab) {
+  ['dashboard','create','history'].forEach(t => {
+    document.getElementById('panel-'+t).classList.add('hidden');
+    document.getElementById('tab-'+t).classList.remove('bg-blue-600','text-white');
+    document.getElementById('tab-'+t).classList.add('text-gray-400','hover:text-white');
+  });
+  document.getElementById('panel-'+tab).classList.remove('hidden');
+  document.getElementById('tab-'+tab).classList.add('bg-blue-600','text-white');
+  document.getElementById('tab-'+tab).classList.remove('text-gray-400','hover:text-white');
+
+  if (tab === 'dashboard') refreshDashboard();
+  if (tab === 'history') loadHistory();
+}
+
+// ========== 健康检查 ==========
+async function checkHealth() {
+  try {
+    const res = await fetch(API + '/api/health');
+    const data = await res.json();
+    document.getElementById('provider-badge').textContent = data.provider || 'unknown';
+  } catch(e) {
+    showToast('⚠️ 后端服务未连接', 'error');
+  }
+}
+
+// ========== 刷新仪表盘 ==========
+async function refreshDashboard() {
+  try {
+    const res = await fetch(API + '/api/stats');
+    const data = await res.json();
+    document.getElementById('stat-total').textContent = data.tasks_total || 0;
+    document.getElementById('stat-running').textContent = data.tasks_running || 0;
+    document.getElementById('stat-completed').textContent = data.tasks_completed || 0;
+    const cost = data.hermes_summary?.total_cost_usd || 0;
+    document.getElementById('stat-cost').textContent = '$' + cost.toFixed(3);
+  } catch(e) {}
+
+  // 加载活跃任务
+  try {
+    const res = await fetch(API + '/api/tasks');
+    const data = await res.json();
+    const active = data.tasks.filter(t => t.status !== 'completed' && t.status !== 'failed');
+    const listEl = document.getElementById('active-tasks-list');
+
+    if (active.length === 0) {
+      listEl.innerHTML = '<div class="bg-gray-900 rounded-xl p-6 border border-gray-800 text-center text-gray-500"><p class="text-4xl mb-2">🚇</p><p>暂无活跃任务，去创建一个吧</p></div>';
+      return;
+    }
+
+    listEl.innerHTML = active.map(t => `
+      <div onclick="openTaskDetail('${t.task_id}')" class="bg-gray-900 rounded-xl border border-gray-800 hover:border-blue-700 p-4 cursor-pointer transition-all group">
+        <div class="flex items-center justify-between mb-2">
+          <span class="font-medium text-white group-hover:text-blue-400 transition-colors">${esc(t.title || t.task_id)}</span>
+          <span class="px-2 py-0.5 rounded text-xs font-medium ${t.status === 'running' ? 'bg-blue-900/50 text-blue-300' : 'bg-amber-900/50 text-amber-300'}">${t.status}</span>
+        </div>
+        <div class="flex items-center gap-3">
+          <div class="flex-1 bg-gray-800 rounded-full h-1.5 overflow-hidden">
+            <div class="bg-gradient-to-r from-blue-500 to-emerald-500 h-full transition-all duration-700" style="width:${t.progress || 0}%"></div>
+          </div>
+          <span class="text-xs text-gray-500 w-12 text-right">${(t.progress || 0).toFixed(0)}%</span>
+        </div>
+        <div class="text-xs text-gray-500 mt-2">📍 ${t.current_station || '起始站'}</div>
+      </div>
+    `).join('');
+
+    // 更新全局统计
+    document.getElementById('stat-running').textContent = active.length;
+    document.getElementById('stat-completed').textContent = data.tasks.filter(t => t.status === 'completed').length;
+  } catch(e) {}
+}
+
+// ========== 创建任务 ==========
+async function createTask(e) {
+  e.preventDefault();
+  const btn = document.getElementById('btn-create');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin-slow inline-block">⏳</span> 启动中...';
+
+  const body = {
+    user_input: document.getElementById('input-request').value,
+    title: document.getElementById('input-title').value,
+    genre: document.getElementById('input-genre').value,
+    chapters: parseInt(document.getElementById('input-chapters').value) || 3,
+    word_count_per_chapter: parseInt(document.getElementById('input-words').value) || 1500,
+    need_video: document.getElementById('input-video').value === 'true'
+  };
+
+  try {
+    const res = await fetch(API + '/api/tasks', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body)
+    });
+    const data = await res.json();
+    if (data.task_id) {
+      showToast('✅ 任务已创建！地铁网络启动中...', 'success');
+      document.getElementById('create-form').reset();
+      openTaskDetail(data.task_id);
+      switchTab('dashboard');
+    } else {
+      showToast('❌ 创建失败', 'error');
+    }
+  } catch(e) {
+    showToast('❌ 网络错误', 'error');
+  }
+  btn.disabled = false;
+  btn.innerHTML = '🚇 启动地铁网络';
+}
+
+// ========== 加载历史 ==========
+async function loadHistory() {
+  const el = document.getElementById('history-list');
+  try {
+    const res = await fetch(API + '/api/tasks');
+    const data = await res.json();
+    if (data.tasks.length === 0) {
+      el.innerHTML = '<div class="bg-gray-900 rounded-xl p-6 border border-gray-800 text-center text-gray-500">暂无任务记录</div>';
+      return;
+    }
+    el.innerHTML = data.tasks.map(t => `
+      <div onclick="openTaskDetail('${t.task_id}')" class="bg-gray-900 rounded-xl border border-gray-800 hover:border-blue-700 p-4 cursor-pointer transition-all">
+        <div class="flex items-center justify-between">
+          <div>
+            <span class="font-medium">${esc(t.title || '未命名')}</span>
+            <span class="text-xs text-gray-500 ml-2">${t.genre || ''}</span>
+          </div>
+          <div class="flex items-center gap-3">
+            <span class="text-xs text-gray-500">${t.current_station || ''} ${(t.progress||0).toFixed(0)}%</span>
+            <span class="px-2 py-0.5 rounded text-xs font-medium ${
+              t.status === 'completed' ? 'bg-emerald-900/50 text-emerald-300' :
+              t.status === 'failed' ? 'bg-red-900/50 text-red-300' :
+              t.status === 'running' ? 'bg-blue-900/50 text-blue-300' :
+              'bg-gray-800 text-gray-400'
+            }">${t.status}</span>
+          </div>
+        </div>
+      </div>
+    `).join('');
+  } catch(e) {
+    el.innerHTML = '<div class="bg-gray-900 rounded-xl p-6 border border-gray-800 text-center text-gray-500">加载失败</div>';
+  }
+}
+
+// ========== 打开任务详情 ==========
+async function openTaskDetail(taskId) {
+  currentTaskId = taskId;
+  document.getElementById('task-detail-modal').classList.remove('hidden');
+  document.getElementById('detail-title').textContent = '加载中...';
+  document.getElementById('output-content').innerHTML = '<p class="text-gray-500 text-center py-8">加载中...</p>';
+
+  // 建立 WebSocket
+  connectWS(taskId);
+
+  // 先加载一次静态数据
+  try {
+    const res = await fetch(API + '/api/tasks/' + taskId);
+    const data = await res.json();
+    updateDetailUI(data);
+  } catch(e) {}
+}
+
+// ========== WebSocket 连接 ==========
+function connectWS(taskId) {
+  if (wsConnection) { wsConnection.close(); }
+  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsUrl = `${protocol}//${location.host}/ws/tasks/${taskId}`;
+  const ws = new WebSocket(wsUrl);
+  wsConnection = ws;
+
+  ws.onmessage = (e) => {
+    const data = JSON.parse(e.data);
+    if (data.type === 'progress') {
+      updateDetailUI(data);
+    } else if (data.type === 'completed') {
+      updateDetailUI({status: 'completed', progress: 100, hermes_summary: data.hermes_summary});
+      showToast('🎉 任务完成！', 'success');
+      loadOutput(taskId);
+      setTimeout(refreshDashboard, 1000);
+    } else if (data.type === 'error') {
+      showToast('⚠️ ' + data.message, 'error');
+    }
+  };
+  ws.onclose = () => { wsConnection = null; };
+  ws.onerror = () => {};
+}
+
+// ========== 更新详情UI ==========
+function updateDetailUI(data) {
+  // 标题
+  document.getElementById('detail-title').textContent = data.title || '创作任务';
+  document.getElementById('detail-subtitle').textContent = `ID: ${currentTaskId} | ${data.genre || ''}`;
+
+  // 状态
+  const statusEl = document.getElementById('detail-status');
+  const status = data.status || 'unknown';
+  const statusMap = {
+    'completed': ['bg-emerald-900/50 text-emerald-300', '✅ 已完成'],
+    'running': ['bg-blue-900/50 text-blue-300', '🚇 运行中'],
+    'processing': ['bg-blue-900/50 text-blue-300', '🔧 处理中'],
+    'waiting': ['bg-amber-900/50 text-amber-300', '⏳ 等待中'],
+    'failed': ['bg-red-900/50 text-red-300', '❌ 失败'],
+  };
+  const [cls, label] = statusMap[status] || ['bg-gray-800 text-gray-400', status];
+  statusEl.className = 'px-2 py-0.5 rounded text-xs font-medium ' + cls;
+  statusEl.textContent = label;
+
+  // 进度
+  const pct = data.progress || data.progress_percent || 0;
+  document.getElementById('detail-percent').textContent = pct.toFixed(0) + '%';
+  document.getElementById('detail-progress-bar').style.width = pct + '%';
+  document.getElementById('detail-station').textContent = '📍 ' + (data.current_station || '...');
+
+  // 统计
+  document.getElementById('detail-fixes').textContent = '🔧 修正: ' + (data.fix_count || 0) + '次';
+  const cost = data.hermes_summary?.total_cost_usd || 0;
+  document.getElementById('detail-cost').textContent = '💰 成本: $' + parseFloat(cost).toFixed(4);
+
+  // 地铁线路图
+  renderMetroMap(data);
+
+  // 如果完成了，加载产物
+  if (status === 'completed') {
+    loadOutput(currentTaskId);
+  }
+}
+
+// ========== 渲染地铁线路图 ==========
+function renderMetroMap(data) {
+  const LINES = [
+    {id:'L1', name:'灵感线', color:'#f59e0b', stations:['S1','S2','H1']},
+    {id:'L2', name:'参考线', color:'#8b5cf6', stations:['R1','R2','R3','H2']},
+    {id:'L3', name:'创作线', color:'#3b82f6', stations:['W1','W2_SLICE','W3','W4','H3']},
+    {id:'L4', name:'发布线', color:'#10b981', stations:['P1','P2','P3_SLICE','H4']},
+    {id:'L5', name:'剧本线', color:'#f97316', stations:['D1','D2','D3_SLICE','H5']},
+    {id:'L6', name:'视频线', color:'#ec4899', stations:['V1','V2','V3','V4','V_END']},
+  ];
+
+  const completed = data.completed_stops || [];
+  const current = data.current_station || '';
+  const hermesWorkers = data.hermes_workers || {};
+
+  const html = LINES.map(line => {
+    const stationsHtml = line.stations.map(sid => {
+      let cls, icon;
+      if (completed.includes(sid)) {
+        cls = 'bg-emerald-600 text-white';
+        icon = '✓';
+      } else if (sid === current) {
+        cls = 'station-active bg-blue-600 text-white ring-2 ring-blue-400';
+        icon = '🚇';
+      } else if (sid.startsWith('H')) {
+        cls = 'bg-gray-700 text-gray-400';
+        icon = '🔀';
+      } else {
+        cls = 'bg-gray-800 text-gray-600';
+        icon = '○';
+      }
+
+      // Worker 统计
+      const worker = hermesWorkers[sid];
+      const tooltip = worker ? `title="执行:${worker.executions}次 成功率:${((worker.success_rate||0)*100).toFixed(0)}% 成本:$${(worker.cost||0).toFixed(3)}"` : '';
+
+      return `<span ${tooltip} class="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${cls}">
+        ${icon} ${sid}
+      </span>`;
+    }).join('<span class="text-gray-600 text-xs">→</span>');
+
+    return `<div class="flex items-center gap-2 text-xs">
+      <span class="w-12 text-right flex-shrink-0" style="color:${line.color}">${line.name}</span>
+      <div class="flex items-center gap-1 flex-wrap">${stationsHtml}</div>
+    </div>`;
+  }).join('');
+
+  document.getElementById('metro-map').innerHTML = html;
+}
+
+// ========== 加载产物 ==========
+async function loadOutput(taskId) {
+  try {
+    const res = await fetch(API + '/api/tasks/' + taskId + '/output');
+    const data = await res.json();
+
+    // 渲染产物标签
+    const tabs = [];
+    if (data.novel && data.novel.chapters && data.novel.chapters.length > 0) tabs.push(['小说', 'novel', '📖']);
+    if (data.outline && Object.keys(data.outline).length > 0) tabs.push(['大纲', 'outline', '📋']);
+    if (data.script && data.script.count > 0) tabs.push(['剧本', 'script', '🎬']);
+    if (data.video && data.video.count > 0) tabs.push(['视频', 'video', '🎥']);
+    if (data.publish && Object.keys(data.publish.platforms || {}).length > 0) tabs.push(['发布', 'publish', '📤']);
+    if (data.stats) tabs.push(['统计', 'stats', '📊']);
+
+    document.getElementById('output-tabs').innerHTML = tabs.map(([name, key, icon], i) =>
+      `<button onclick="showOutputContent('${key}', '${taskId}')" id="outtab-${key}"
+        class="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${i===0?'bg-blue-600 text-white':'bg-gray-800 text-gray-400 hover:text-white'}">
+        ${icon} ${name}
+      </button>`
+    ).join('');
+
+    // 缓存数据
+    window._outputData = data;
+    if (tabs.length > 0) showOutputContent(tabs[0][1], taskId);
+
+  } catch(e) {
+    document.getElementById('output-content').innerHTML = '<p class="text-gray-500 text-center py-8">产物加载失败</p>';
+  }
+}
+
+function showOutputContent(key, taskId) {
+  // 更新标签样式
+  document.querySelectorAll('#output-tabs button').forEach(b => {
+    b.classList.remove('bg-blue-600','text-white');
+    b.classList.add('bg-gray-800','text-gray-400');
+  });
+  const activeTab = document.getElementById('outtab-'+key);
+  if (activeTab) { activeTab.classList.remove('bg-gray-800','text-gray-400'); activeTab.classList.add('bg-blue-600','text-white'); }
+
+  const data = window._outputData;
+  if (!data) return;
+  const el = document.getElementById('output-content');
+
+  switch(key) {
+    case 'novel':
+      const chapters = data.novel?.chapters || [];
+      el.innerHTML = chapters.map((ch, i) => `
+        <div class="mb-4 bg-gray-800/50 rounded-lg p-4 border border-gray-700">
+          <h4 class="font-bold text-white mb-2">${esc(ch.title || '第'+(i+1)+'章')}</h4>
+          <div class="text-sm text-gray-300 whitespace-pre-wrap leading-relaxed">${esc(ch.content || '')}</div>
+        </div>
+      `).join('') || '<p class="text-gray-500 text-center py-8">暂无内容</p>';
+      break;
+    case 'outline':
+      el.innerHTML = `<pre class="text-sm text-gray-300 whitespace-pre-wrap bg-gray-800/50 rounded-lg p-4 border border-gray-700">${esc(JSON.stringify(data.outline, null, 2))}</pre>`;
+      break;
+    case 'script':
+      const scenes = data.script?.scenes || [];
+      el.innerHTML = scenes.map(s => `
+        <div class="mb-3 bg-gray-800/50 rounded-lg p-4 border border-gray-700">
+          <h4 class="font-bold text-white mb-1">场景 ${s.id}</h4>
+          <div class="text-sm text-gray-300 whitespace-pre-wrap">${esc(typeof s.content === 'string' ? s.content : JSON.stringify(s.content, null, 2))}</div>
+        </div>
+      `).join('') || '<p class="text-gray-500 text-center py-8">暂无剧本</p>';
+      break;
+    case 'video':
+      el.innerHTML = `<pre class="text-sm text-gray-300 whitespace-pre-wrap bg-gray-800/50 rounded-lg p-4 border border-gray-700">${esc(JSON.stringify(data.video, null, 2))}</pre>`;
+      break;
+    case 'publish':
+      el.innerHTML = `<pre class="text-sm text-gray-300 whitespace-pre-wrap bg-gray-800/50 rounded-lg p-4 border border-gray-700">${esc(JSON.stringify(data.publish, null, 2))}</pre>`;
+      break;
+    case 'stats':
+      el.innerHTML = `<pre class="text-sm text-gray-300 whitespace-pre-wrap bg-gray-800/50 rounded-lg p-4 border border-gray-700">${esc(JSON.stringify(data.stats, null, 2))}</pre>`;
+      break;
+  }
+}
+
+// ========== 工具函数 ==========
+function esc(str) {
+  if (!str) return '';
+  const s = String(str);
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function showToast(msg, type) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = 'fixed bottom-6 right-6 rounded-lg px-4 py-3 shadow-xl z-50 max-w-sm toast-in border ' +
+    (type === 'error' ? 'bg-red-900/80 border-red-700 text-red-200' :
+     type === 'success' ? 'bg-emerald-900/80 border-emerald-700 text-emerald-200' :
+     'bg-gray-800 border-gray-700 text-gray-200');
+  el.classList.remove('hidden');
+  setTimeout(() => el.classList.add('hidden'), 3500);
+}
+
+// 定时刷新仪表盘
+setInterval(refreshDashboard, 5000);
+</script>
+</body>
+</html>
