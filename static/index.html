@@ -583,9 +583,15 @@ function renderNetworkSVG() {
     const sc = p.sc;
     const r = sc.is_hub ? 11 : (sc.slice ? 9 : 6);
     const fill = sc.is_hub ? '#6b7280' : (sc.slice ? '#6366f1' : '#374151');
-    c += `<circle cx="${p.x}" cy="${p.y}" r="${r}" fill="${fill}" stroke="#9ca3af" stroke-width="1.5"/>`;
+    const rate = ((sc.success_rate || 0) * 100).toFixed(0);
+    const tip = `${id}${sc.agent ? ' · ' + sc.agent : ''}\n执行 ${sc.executions || 0} 次 · 成功率 ${rate}% · 成本 $${(sc.cost || 0).toFixed(4)}` +
+      (sc.waiting ? '\n站台等待 ' + sc.waiting : '') +
+      (sc.slice && sc.active_slices ? '\n切片并行 ' + sc.active_slices + ' 组' : '');
+    c += `<circle cx="${p.x}" cy="${p.y}" r="${r}" fill="${fill}" stroke="#9ca3af" stroke-width="1.5"><title>${tip}</title></circle>`;
     c += `<text x="${p.x}" y="${p.y + (sc.is_hub ? 22 : 18)}" fill="#9ca3af" font-size="10" text-anchor="middle">${id}</text>`;
-    if (sc.waiting > 0) {
+    if (sc.slice && sc.active_slices > 0) {
+      c += `<text x="${p.x}" y="${p.y - 13}" fill="#818cf8" font-size="9" font-weight="600" text-anchor="middle">⟳${sc.active_slices}</text>`;
+    } else if (sc.waiting > 0) {
       c += `<text x="${p.x}" y="${p.y - 13}" fill="#fbbf24" font-size="9" text-anchor="middle">${sc.waiting}</text>`;
     }
   });
@@ -603,6 +609,15 @@ function renderNetworkSVG() {
 
   svg.innerHTML = c;
 }
+
+// ========== 拓扑实时刷新（每 3 秒更新站台繁忙度/切片并行动态） ==========
+setInterval(async () => {
+  try {
+    const res = await fetch(API + '/api/topology');
+    window._topology = await res.json();
+    renderNetworkSVG();
+  } catch (e) { /* 忽略轮询错误 */ }
+}, 3000);
 
 // ========== 加载产物 ==========
 async function loadOutput(taskId) {

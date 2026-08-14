@@ -329,15 +329,21 @@ class MetroEngine:
         return self.metrics.snapshot()
 
     def get_topology(self) -> Dict:
-        """返回网络拓扑结构（供可视化）：线路/站点/切片/换乘 + 站台繁忙度"""
+        """返回网络拓扑结构（供可视化）：线路/站点/切片/换乘 + 站台繁忙度 + 执行统计"""
         if not self.network_config:
             return {"name": "", "lines": [], "itinerary": []}
+
+        worker_stats = self.hermes_bridge.get_worker_stats()
 
         lines = []
         for lc in self.network_config.lines:
             stations = []
             for sc in lc.stations:
                 station = self.network.get_station(sc.id)
+                ws = worker_stats.get(sc.id, {})
+                # 切片站：活跃切片追踪数（并行中子乘客组数）
+                active_slices = (len(station.parent_tracking)
+                                 if station and hasattr(station, 'parent_tracking') else 0)
                 stations.append({
                     "id": sc.id,
                     "is_hub": sc.is_hub,
@@ -346,6 +352,10 @@ class MetroEngine:
                     "agent": sc.agent,
                     "backloop_target": station.backloop_target if station else None,
                     "waiting": station.platform.get_waiting_count() if station else 0,
+                    "executions": ws.get("executions", 0),
+                    "success_rate": ws.get("success_rate", 0.0),
+                    "cost": ws.get("total_cost_usd", 0.0),
+                    "active_slices": active_slices,
                 })
             lines.append({"id": lc.id, "name": lc.name, "stations": stations})
 
