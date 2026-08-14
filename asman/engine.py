@@ -228,7 +228,7 @@ class MetroEngine:
                     outputs.append(f"merged_{sc.id}")
         return outputs
 
-    async def run(self, user_input: str) -> str:
+    async def run(self, user_input: str, project_id=None) -> str:
         if not self.network.lines:
             await self.build_network()
 
@@ -245,7 +245,7 @@ class MetroEngine:
                 config=config,
             ),
             itinerary=itinerary,
-            baggage={"request": user_input, "config": config},
+            baggage={"request": user_input, "config": config, "_project": project_id},
             priority=5,
         )
 

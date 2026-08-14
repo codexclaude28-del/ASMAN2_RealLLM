@@ -31,6 +31,8 @@ from pathlib import Path
 from asman.engine import MetroEngine
 from asman.runtime.config import EngineConfig, LLMConfig, JudgeConfig, load_yaml, save_yaml
 from asman.runtime.auth import UserStore, create_token, verify_token
+from asman.runtime.model_store import ModelStore
+from asman.runtime.project_store import ProjectStore
 from examples.novel.agents import register_all
 from examples.novel.bootstrapper import NovelBootstrapper
 
@@ -44,6 +46,11 @@ class CreateTaskRequest(BaseModel):
     chapters: int = 3
     word_count_per_chapter: int = 1500
     need_video: bool = True
+    project_id: int = None
+
+
+class ProjectCreate(BaseModel):
+    name: str
 
 
 class TaskInfo(BaseModel):
@@ -66,6 +73,14 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class ModelCreate(BaseModel):
+    name: str
+    provider: str
+    api_key: str
+    base_url: str = ""
+    model: str = ""
+
+
 class NetworkConfigUpdate(BaseModel):
     network: dict
     profiles: dict = {}
@@ -77,6 +92,8 @@ engine: Optional[MetroEngine] = None
 active_ws_connections: Dict[str, list] = {}
 task_registry: Dict[str, dict] = {}  # task_id → metadata
 user_store = UserStore(os.getenv("USERS_DB", "asman_users.db"))
+model_store = ModelStore()
+project_store = ProjectStore()
 security = HTTPBearer(auto_error=False)
 
 
@@ -154,6 +171,43 @@ async def login(req: LoginRequest):
     return {"token": create_token(req.username), "token_type": "bearer", "username": req.username}
 
 
+@app.get("/api/models")
+async def list_models():
+    """模型列表（api_key 脱敏）"""
+    return {"models": model_store.list_models()}
+
+
+@app.post("/api/models")
+async def create_model(req: ModelCreate):
+    """添加模型配置（api_key 加密存储）"""
+    model_store.create(req.name, req.provider, req.api_key, req.base_url, req.model)
+    return {"message": "模型已添加"}
+
+
+@app.delete("/api/models/{model_id}")
+async def delete_model(model_id: int):
+    model_store.delete(model_id)
+    return {"message": "已删除"}
+
+
+@app.get("/api/projects")
+async def list_projects():
+    """项目列表（多租户边界）"""
+    return {"projects": project_store.list_projects()}
+
+
+@app.post("/api/projects")
+async def create_project(req: ProjectCreate):
+    project_store.create(req.name, "default")
+    return {"message": "项目已创建"}
+
+
+@app.delete("/api/projects/{project_id}")
+async def delete_project(project_id: int):
+    project_store.delete(project_id)
+    return {"message": "已删除"}
+
+
 @app.get("/api/health")
 async def health():
     return {"status": "ok", "provider": engine.llm_client.provider if engine else "unknown"}
@@ -170,13 +224,14 @@ async def create_task(req: CreateTaskRequest):
     if req.title:
         user_input = f"标题:{req.title} 题材:{req.genre} 章节:{req.chapters}章 字数:{req.word_count_per_chapter}字/章 视频:{'需要' if req.need_video else '不需要'} " + user_input
 
-    task_id = await engine.run(user_input)
+    task_id = await engine.run(user_input, project_id=req.project_id)
 
     task_registry[task_id] = {
         "task_id": task_id,
         "title": req.title or req.user_input[:40],
         "genre": req.genre or "待推断",
         "user_input": req.user_input,
+        "project_id": req.project_id,
         "created_at": time.time(),
         "status": "running"
     }
@@ -185,16 +240,19 @@ async def create_task(req: CreateTaskRequest):
 
 
 @app.get("/api/tasks")
-async def list_tasks():
-    """列出所有任务"""
+async def list_tasks(project_id: int = None):
+    """列出所有任务（可按 project_id 过滤）"""
     tasks = []
     for tid, meta in task_registry.items():
+        if project_id is not None and meta.get("project_id") != project_id:
+            continue
         try:
             progress = await engine.get_progress(tid)
             tasks.append({
                 "task_id": tid,
                 "title": meta.get("title", ""),
                 "genre": meta.get("genre", ""),
+                "project_id": meta.get("project_id"),
                 "status": progress.get("status", "unknown"),
                 "progress": progress.get("progress_percent", 0),
                 "current_station": progress.get("current_station", ""),
@@ -204,6 +262,7 @@ async def list_tasks():
             tasks.append({
                 "task_id": tid,
                 "title": meta.get("title", ""),
+                "project_id": meta.get("project_id"),
                 "status": "error",
                 "error": str(e)
             })
