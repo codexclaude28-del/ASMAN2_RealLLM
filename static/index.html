@@ -54,6 +54,7 @@ tailwind.config = {
     <button onclick="switchTab('dashboard')" id="tab-dashboard" class="px-4 py-2 rounded-md text-sm font-medium transition-colors bg-blue-600 text-white">📊 仪表盘</button>
     <button onclick="switchTab('create')" id="tab-create" class="px-4 py-2 rounded-md text-sm font-medium transition-colors text-gray-400 hover:text-white">➕ 新建任务</button>
     <button onclick="switchTab('history')" id="tab-history" class="px-4 py-2 rounded-md text-sm font-medium transition-colors text-gray-400 hover:text-white">📋 任务历史</button>
+    <button onclick="switchTab('editor')" id="tab-editor" class="px-4 py-2 rounded-md text-sm font-medium transition-colors text-gray-400 hover:text-white">🛠️ 编排</button>
   </div>
 
   <!-- ====== 仪表盘 ====== -->
@@ -156,6 +157,18 @@ tailwind.config = {
         <p>加载中...</p>
       </div>
     </div>
+  </div>
+
+  <!-- ====== 编排（可视化拓扑编辑器） ====== -->
+  <div id="panel-editor" class="hidden">
+    <div class="flex items-center justify-between mb-4">
+      <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider">🛠️ 拓扑编排</h2>
+      <div class="flex gap-2">
+        <button onclick="addLine()" class="px-3 py-1.5 rounded-lg bg-gray-800 hover:bg-gray-700 text-xs font-medium border border-gray-700 transition-colors">+ 线路</button>
+        <button onclick="saveNetwork()" class="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-xs font-medium transition-colors">💾 保存并热重载</button>
+      </div>
+    </div>
+    <div id="editor-lines" class="space-y-3"></div>
   </div>
 
   <!-- ====== 任务详情弹窗 ====== -->
@@ -262,7 +275,7 @@ function toggleDark() {
 
 // ========== 标签切换 ==========
 function switchTab(tab) {
-  ['dashboard','create','history'].forEach(t => {
+  ['dashboard','create','history','editor'].forEach(t => {
     document.getElementById('panel-'+t).classList.add('hidden');
     document.getElementById('tab-'+t).classList.remove('bg-blue-600','text-white');
     document.getElementById('tab-'+t).classList.add('text-gray-400','hover:text-white');
@@ -273,6 +286,7 @@ function switchTab(tab) {
 
   if (tab === 'dashboard') refreshDashboard();
   if (tab === 'history') loadHistory();
+  if (tab === 'editor') loadEditor();
 }
 
 // ========== 健康检查 ==========
@@ -465,6 +479,106 @@ async function loadArtifacts(taskId) {
       </a>`;
     }).join('');
   } catch(e) {}
+}
+
+// ========== 拓扑编辑器 ==========
+async function loadEditor() {
+  try {
+    const res = await fetch(API + '/api/network/config');
+    const data = await res.json();
+    window._editorData = { network: data.network || {}, profiles: data.profiles || {} };
+    renderEditor();
+  } catch(e) {}
+}
+
+function renderEditor() {
+  const d = window._editorData;
+  if (!d || !d.network) return;
+  const lines = d.network.lines || [];
+  const el = document.getElementById('editor-lines');
+
+  el.innerHTML = lines.map((line, li) => {
+    const stations = (line.stations || []).map((st, si) => {
+      const isSlice = st.slice ? 1 : (st.is_hub ? 2 : 0);
+      const typeOpts = ['普通站', '切片站', 'Hub'].map((label, i) => {
+        const val = [null, 'slice', 'hub'][i];
+        return `<option value="${val || ''}" ${i === isSlice ? 'selected' : ''}>${label}</option>`;
+      }).join('');
+      return `<div class="flex items-center gap-2 mb-1.5">
+        <input value="${st.id || ''}" oninput="updateStation(${li},${si},'id',this.value)" placeholder="站点ID" class="flex-1 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs"/>
+        <input value="${st.agent || ''}" oninput="updateStation(${li},${si},'agent',this.value)" placeholder="agent 名" class="flex-1 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs"/>
+        <select onchange="updateStationType(${li},${si},this.value)" class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs">${typeOpts}</select>
+        <button onclick="deleteStation(${li},${si})" class="text-red-400 hover:text-red-300 text-xs flex-shrink-0">✕</button>
+      </div>`;
+    }).join('');
+
+    return `<div class="bg-gray-900 rounded-xl p-4 border border-gray-800">
+      <div class="flex items-center gap-2 mb-3">
+        <input value="${line.id || ''}" oninput="updateLine(${li},'id',this.value)" placeholder="线路ID" class="w-24 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs"/>
+        <input value="${line.name || ''}" oninput="updateLine(${li},'name',this.value)" placeholder="线路名" class="flex-1 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs"/>
+        <button onclick="addStation(${li})" class="text-xs text-blue-400 hover:text-blue-300 flex-shrink-0">+ 站点</button>
+        <button onclick="deleteLine(${li})" class="text-xs text-red-400 hover:text-red-300 flex-shrink-0">删除线路</button>
+      </div>
+      ${stations || '<p class="text-xs text-gray-600">暂无站点</p>'}
+    </div>`;
+  }).join('');
+}
+
+function updateLine(li, key, val) {
+  window._editorData.network.lines[li][key] = val;
+}
+
+function updateStation(li, si, key, val) {
+  window._editorData.network.lines[li].stations[si][key] = val;
+}
+
+function updateStationType(li, si, type) {
+  const st = window._editorData.network.lines[li].stations[si];
+  delete st.slice; delete st.is_hub;
+  if (type === 'slice') st.slice = true;
+  if (type === 'hub') st.is_hub = true;
+}
+
+function addLine() {
+  window._editorData.network.lines = window._editorData.network.lines || [];
+  window._editorData.network.lines.push({ id: 'L' + (window._editorData.network.lines.length + 1), name: '新线路', stations: [] });
+  renderEditor();
+}
+
+function deleteLine(li) {
+  window._editorData.network.lines.splice(li, 1);
+  renderEditor();
+}
+
+function addStation(li) {
+  const line = window._editorData.network.lines[li];
+  line.stations = line.stations || [];
+  line.stations.push({ id: 'S' + (line.stations.length + 1), agent: '' });
+  renderEditor();
+}
+
+function deleteStation(li, si) {
+  window._editorData.network.lines[li].stations.splice(si, 1);
+  renderEditor();
+}
+
+async function saveNetwork() {
+  try {
+    const res = await fetch(API + '/api/network/config', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(window._editorData)
+    });
+    const data = await res.json();
+    if (res.ok) {
+      showToast('✅ 已保存并热重载', 'success');
+      await loadTopology();
+    } else {
+      showToast('⚠️ ' + (data.detail || '保存失败'), 'error');
+    }
+  } catch(e) {
+    showToast('⚠️ 保存失败', 'error');
+  }
 }
 
 // ========== WebSocket 连接 ==========

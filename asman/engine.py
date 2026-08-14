@@ -158,6 +158,67 @@ class MetroEngine:
                 s.metrics = self.metrics
                 s.artifact_store = self.artifact_store
 
+    def reload_network(self, network_dict: Dict, profiles_dict: Dict) -> tuple:
+        """保存新拓扑配置并热重载。返回 (成功, 消息)。"""
+        # 1. 检查无运行中任务
+        active = [p for p in self.occ.registry.values()
+                  if p.status.value not in ("completed", "failed")]
+        if active:
+            return False, f"有 {len(active)} 个运行中任务，无法热重载"
+
+        was_running = self.running
+        # 2. 停止后台任务
+        for line in self.network.lines.values():
+            line.running = False
+        self.three_tier_loop.stop()
+        self.self_healing.running = False
+        self.nudge_engine.running = False
+        if self.backloop:
+            self.backloop.running = False
+        self.running = False
+
+        # 3. 更新配置
+        self.config.network = network_dict
+        self.config.profiles = profiles_dict
+
+        # 4. 重建网络
+        self.network_config = NetworkConfig(**network_dict)
+        self.network = MetroNetwork(self.occ)
+        self.occ.network = self.network
+        self.hub_manager = HubManager()
+        self.hub_manager.network = self.network
+        if self.backloop:
+            self.backloop.network = self.network
+        self.convergence.network = self.network
+        self.self_healing.network = self.network
+        self.nudge_engine.network = self.network
+        for station_id, prof in load_profiles(profiles_dict).items():
+            register_profile(station_id, prof)
+        self.network.build_from_config(self.network_config, self.backloop,
+                                       self.hub_manager, self.dispatcher,
+                                       worker_concurrency=self.config.worker_concurrency)
+        self.convergence.required_outputs = self._infer_required_outputs(self.network_config)
+
+        # 5. 注入依赖
+        for line in self.network.lines.values():
+            for s in line.stations:
+                s.dispatcher = self.dispatcher
+                s.backloop = self.backloop
+                s.hub_manager = self.hub_manager
+                s.state_layer = self.state_layer
+                s.skill_library = self.skill_library
+                s.moa_verifier = self.moa_verifier
+                s.hermes_bridge = self.hermes_bridge
+                s.metrics = self.metrics
+                s.artifact_store = self.artifact_store
+
+        # 6. 重启后台任务
+        if was_running:
+            self.running = True
+            self._start_background_tasks()
+
+        return True, "热重载成功"
+
     def _infer_required_outputs(self, net_cfg: NetworkConfig) -> list:
         """收敛所需的产物 key：所有切片站的 merged_{station_id}"""
         outputs = []

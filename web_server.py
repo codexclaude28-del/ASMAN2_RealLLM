@@ -29,7 +29,7 @@ from pydantic import BaseModel
 from pathlib import Path
 
 from asman.engine import MetroEngine
-from asman.runtime.config import EngineConfig, LLMConfig, JudgeConfig, load_yaml
+from asman.runtime.config import EngineConfig, LLMConfig, JudgeConfig, load_yaml, save_yaml
 from asman.runtime.auth import UserStore, create_token, verify_token
 from examples.novel.agents import register_all
 from examples.novel.bootstrapper import NovelBootstrapper
@@ -64,6 +64,11 @@ class RegisterRequest(BaseModel):
 class LoginRequest(BaseModel):
     username: str
     password: str
+
+
+class NetworkConfigUpdate(BaseModel):
+    network: dict
+    profiles: dict = {}
 
 
 # ================ 全局状态 ================
@@ -336,6 +341,28 @@ async def get_topology():
     if not engine:
         return {"name": "", "lines": [], "itinerary": []}
     return engine.get_topology()
+
+
+@app.get("/api/network/config")
+async def get_network_config():
+    """获取当前 network + profiles 配置（供编辑器）"""
+    if not engine:
+        return {"network": {}, "profiles": {}}
+    return {"network": engine.config.network, "profiles": engine.config.profiles}
+
+
+@app.put("/api/network/config")
+async def put_network_config(req: NetworkConfigUpdate):
+    """保存新拓扑配置并热重载"""
+    if not engine:
+        raise HTTPException(503, "引擎未就绪")
+    ok, msg = engine.reload_network(req.network, req.profiles)
+    if not ok:
+        raise HTTPException(409, msg)
+    here = Path(__file__).resolve().parent / "examples" / "novel"
+    save_yaml(str(here / "network.yaml"), req.network)
+    save_yaml(str(here / "profiles.yaml"), req.profiles)
+    return {"message": msg}
 
 
 # ================ WebSocket（实时进度推送） ================
