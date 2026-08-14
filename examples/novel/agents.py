@@ -208,7 +208,7 @@ class ScriptAgent(Agent):
     async def execute(self, input_data: Dict, passenger_id: str) -> Dict:
         await super().execute(input_data, passenger_id)
         if self.sub_type == "adapt":
-            return {"script_structure": "三幕式", "scenes": 30, "adaptation_rate": 0.85}
+            return {"script_structure": "三幕式", "scenes": 3, "adaptation_rate": 0.85}
         else:
             return {"dialogues": 120, "character_voice_consistency": 0.92}
 

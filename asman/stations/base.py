@@ -4,9 +4,10 @@
 
 import asyncio
 import time
-from typing import List, Optional
+from typing import List, Optional, Dict
 from ..core.models import Passenger, PassengerStatus, GateResult
 from ..core.quality_gate import QualityGate
+from ..core.worker import LocalStationWorker
 from ..agents.base import Agent
 from ..runtime.logging import get_logger, passenger_id_var, station_id_var
 
@@ -47,17 +48,21 @@ class Station:
     """普通站点：通过Hermes Bridge调用Profile Worker执行"""
 
     def __init__(self, station_id: str, agent: Agent, line_id: str, is_hub: bool = False,
-                 backloop_target: Optional[str] = None):
+                 backloop_target: Optional[str] = None, gate: str = "auto",
+                 output_schema: Optional[Dict] = None, processing_capacity: int = 5):
         self.station_id = station_id
         self.agent = agent
         self.line_id = line_id
         self.is_hub = is_hub
         self.backloop_target = backloop_target
+        self.gate = gate  # auto | manual
+        self.output_schema = output_schema
         self.platform = Platform()
-        self.processing_capacity = 5
+        self.processing_capacity = processing_capacity
         self.current_load = 0
         self.semaphore = asyncio.Semaphore(self.processing_capacity)
         self.quality_gate = QualityGate(station_id)
+        self.worker = LocalStationWorker()  # 分布式扩展点（可替换为 DistributedWorker）
 
         # 融合模块注入点
         self.occ = None
@@ -88,11 +93,13 @@ class Station:
 
             if self.state_layer:
                 self.state_layer.save_passenger(p)
+                self.state_layer.append_event(p.passenger_id, "station_entered",
+                                              {"station": self.station_id})
 
             if self.is_hub:
                 await hub_manager.handle_arrival(p, self)
             else:
-                await self.process_passenger(p)
+                await self.worker.process(self, p)
 
     async def process_passenger(self, passenger: Passenger):
         async with self.semaphore:
@@ -116,7 +123,7 @@ class Station:
             try:
                 # ==== 核心：通过Hermes Bridge调用Profile Worker ====
                 # 30s超时 + 自动降级到本地Agent，确保管道不阻塞
-                if self.hermes_bridge:
+                if self.hermes_bridge and self.hermes_bridge.llm_client.provider != "mock":
                     try:
                         result = await asyncio.wait_for(
                             self._execute_via_hermes(passenger), timeout=120.0
@@ -125,9 +132,17 @@ class Station:
                         logger.warning("LLM超时/失败，降级到本地Agent")
                         result = await self._execute_local(passenger)
                 else:
+                    # mock 模式：走本地 Agent 业务逻辑（mock 的是 LLM，不是业务）
                     result = await self._execute_local(passenger)
 
                 passenger.baggage[f"output_{self.station_id}"] = result
+
+                # 产出 schema 校验（不符合 → 直接回环）
+                schema_ok, missing = self._validate_output(result)
+                if not schema_ok:
+                    logger.warning("产出不符合 schema，缺失: %s", missing)
+                    await self._trigger_backloop(passenger, 0.0)
+                    return
 
                 # MoA独立验证
                 avg_score = await self._verify_with_moa(result, passenger)
@@ -138,7 +153,13 @@ class Station:
 
                 # 判断质检结果
                 threshold = passenger.ticket.config.quality_threshold
-                if avg_score >= threshold:
+                if self.gate == "manual":
+                    # 人工门控：质检通过后挂起等待审批
+                    if avg_score >= threshold:
+                        await self._await_approval(passenger)
+                    else:
+                        await self._trigger_backloop(passenger, avg_score)
+                elif avg_score >= threshold:
                     await self._continue_journey(passenger)
                 else:
                     retry_count = passenger.get_retry_count(self.station_id)
@@ -237,8 +258,31 @@ class Station:
                 passenger.status = PassengerStatus.COMPLETED
                 if self.metrics:
                     self.metrics.incr("tasks_completed")
+                if self.state_layer:
+                    self.state_layer.append_event(passenger.passenger_id, "delivered",
+                                                  {"station": self.station_id})
         if self.state_layer:
             self.state_layer.save_passenger(passenger)
+
+    def _validate_output(self, result) -> tuple:
+        """校验产出是否符合 output_schema（如 {required: [key1, key2]}）"""
+        schema = self.output_schema
+        if not schema:
+            return True, ""
+        required = schema.get("required", [])
+        if isinstance(result, dict):
+            missing = [k for k in required if k not in result]
+            return (len(missing) == 0), ",".join(missing)
+        return bool(result), "非dict产出"
+
+    async def _await_approval(self, passenger: Passenger):
+        """人工门控：挂起等待外部 approve/reject"""
+        passenger.status = PassengerStatus.AWAITING_APPROVAL
+        if self.state_layer:
+            self.state_layer.save_passenger(passenger)
+            self.state_layer.append_event(passenger.passenger_id, "awaiting_approval",
+                                          {"station": self.station_id})
+        logger.info("站点产出挂起，等待人工审批")
 
     async def _trigger_backloop(self, passenger: Passenger, score: float):
         if not self.backloop:
@@ -253,6 +297,9 @@ class Station:
 
         if self.metrics:
             self.metrics.incr("backloops")
+        if self.state_layer:
+            self.state_layer.append_event(passenger.passenger_id, "backloop",
+                                          {"from": self.station_id, "to": target, "weakest": weakest})
 
         await self.backloop.send_back(
             passenger=passenger,

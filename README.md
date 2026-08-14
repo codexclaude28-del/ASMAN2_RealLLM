@@ -75,7 +75,7 @@ itinerary:
   - {line: L1, board: S1, alight: [S1, S1_SLICE, H1], transfer: H1}
 ```
 
-关键字段：`agent`（注册名）、`slice: true`（切片站，Agent 需实现 `slice`/`merge`）、`reassemble_hub`（切片重组 Hub）、`is_hub`（换乘枢纽）、`backloop_target`（质检失败回环的上游站，默认同线前一个站）。
+关键字段：`agent`（注册名）、`slice: true`（切片站，Agent 需实现 `slice`/`merge`）、`reassemble_hub`（切片重组 Hub）、`is_hub`（换乘枢纽）、`backloop_target`（质检失败回环的上游站，默认同线前一个站）、`gate: manual`（人工审批门控）、`output_schema`（产出校验，如 `{required: [key1, key2]}`）。
 
 ### 3. 写 Profile（`profiles.yaml`）
 
@@ -152,6 +152,15 @@ asman/
 **核心机制**：站点出站 = LLM 生成 → LLM-as-Judge 评分 → 达标放行 / 未达标重试(≤max_retry) / 重试耗尽坐回环线到 `backloop_target`。收敛需满足六条件：子乘客重组完、质检全过、回环收敛、产物齐全、无挂起重试、**行程走完**。
 
 ---
+
+## 进阶特性
+
+- **拓扑可视化**：`GET /api/topology` 返回线路/站点/切片/换乘结构，前端地铁图运行时染色（完成站绿、当前站闪烁、切片站/Hub 图标区分）。
+- **事件溯源**：每个乘客状态变化追加 `passenger_events` 事件（created/station_entered/backloop/slice_reassembled/delivered…），`GET /api/tasks/{id}/events` 查询审计轨迹。
+- **人工门控**：站点配 `gate: manual`，产出后挂起等审批；`POST /api/tasks/{id}/approve` / `/reject`（驳回触发回环）。
+- **角色结构化**：Profile 支持 CrewAI 式 `role`/`goal`/`backstory`，自动拼入系统提示词。
+- **产出校验**：站点配 `output_schema`，出站前校验产出必需字段，不合规直接回环。
+- **worker 抽象**：站点处理经 `StationWorker`（默认进程内），为分布式留扩展点。
 
 ## 测试
 

@@ -19,8 +19,11 @@ class SliceStation(Station):
     """
 
     def __init__(self, station_id: str, agent, line_id: str,
-                 reassemble_hub: str, backloop_target: Optional[str] = None):
-        super().__init__(station_id, agent, line_id, backloop_target=backloop_target)
+                 reassemble_hub: str, backloop_target: Optional[str] = None, gate: str = "auto",
+                 output_schema: Optional[Dict] = None, processing_capacity: int = 5):
+        super().__init__(station_id, agent, line_id, backloop_target=backloop_target,
+                         gate=gate, output_schema=output_schema,
+                         processing_capacity=processing_capacity)
         self.reassemble_hub = reassemble_hub
         self.parent_tracking: Dict[str, Dict] = {}
 
@@ -119,6 +122,10 @@ class SliceStation(Station):
         # 1. Agent合并
         merged = await self.agent.merge(tracking["results"])
         parent.baggage[f"merged_{self.station_id}"] = merged
+
+        if self.state_layer:
+            self.state_layer.append_event(parent.passenger_id, "slice_reassembled",
+                                          {"station": self.station_id, "subs": tracking["total"]})
 
         # 2. 恢复主乘客（completed_stops 已在 handle_alighting 记录过，此处不重复）
         parent.status = PassengerStatus.WAITING

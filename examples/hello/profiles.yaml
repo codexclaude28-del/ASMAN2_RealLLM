@@ -1,0 +1,21 @@
+# 最小示例：Profile 配置（演示 CrewAI 式角色卡 role/goal/backstory）
+K1:
+  name: keyword_profile
+  system_prompt: "从文本提取关键词，只输出 JSON {keywords, count}。"
+  role: "关键词提取器"
+  goal: "从输入文本提取核心关键词"
+  backstory: "资深 NLP 工程师"
+  model: ""
+  temperature: 0.3
+S1:
+  name: summary_profile
+  system_prompt: "生成一句话摘要，只输出 JSON {summary, length}。"
+  role: "摘要员"
+  goal: "生成简洁准确的一句话摘要"
+  model: ""
+  temperature: 0.5
+T1:
+  name: translate_profile
+  system_prompt: "翻译成英文，只输出 JSON {translated}。"
+  model: ""
+  temperature: 0.3

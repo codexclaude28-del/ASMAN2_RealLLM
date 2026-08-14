@@ -42,7 +42,7 @@ class HermesWorker:
         # 2. 调用真实LLM
         try:
             llm_response = await self.llm_client.chat(
-                system_prompt=self.profile.system_prompt,
+                system_prompt=self._build_system_prompt(),
                 user_prompt=prompt,
                 model=self.profile.model or None,
                 temperature=self.profile.temperature,
@@ -79,6 +79,18 @@ class HermesWorker:
             # LLM调用失败，降级到mock
             print(f"[HermesWorker {self.station_id}] LLM调用失败: {e}，降级到mock")
             return await self._mock_execute(input_data)
+
+    def _build_system_prompt(self) -> str:
+        """构建系统提示词（含 CrewAI 式角色卡 role/goal/backstory）"""
+        base = self.profile.system_prompt
+        extras = []
+        if self.profile.role:
+            extras.append(f"角色: {self.profile.role}")
+        if self.profile.backstory:
+            extras.append(f"背景: {self.profile.backstory}")
+        if self.profile.goal:
+            extras.append(f"目标: {self.profile.goal}")
+        return base + ("\n\n" + "\n".join(extras) if extras else "")
 
     def _build_prompt(self, input_data: Dict) -> str:
         """构建prompt — 精简上下文，减少token消耗"""

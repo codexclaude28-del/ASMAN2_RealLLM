@@ -1,0 +1,11 @@
+# 最小示例：单线文本处理流水线（演示 output_schema 产出校验）
+name: hello_pipeline
+lines:
+  - id: L1
+    name: 文本处理线
+    stations:
+      - {id: K1, agent: keyword, output_schema: {required: [keywords, count]}}
+      - {id: S1, agent: summary, output_schema: {required: [summary]}}
+      - {id: T1, agent: translate}
+itinerary:
+  - {line: L1, board: K1, alight: [K1, S1, T1]}

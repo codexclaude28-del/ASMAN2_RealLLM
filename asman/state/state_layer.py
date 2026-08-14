@@ -35,6 +35,8 @@ class StateLayer:
             cursor.execute("CREATE TABLE IF NOT EXISTS hub_transfer (hub_id TEXT, passenger_id TEXT, from_line TEXT, to_line TEXT, arrived_at REAL)")
             cursor.execute("CREATE TABLE IF NOT EXISTS checkpoints (checkpoint_id TEXT PRIMARY KEY, passenger_id TEXT, state_snapshot TEXT, created_at REAL)")
             cursor.execute("CREATE TABLE IF NOT EXISTS execution_log (id INTEGER PRIMARY KEY AUTOINCREMENT, passenger_id TEXT, station_id TEXT, action TEXT, input_hash TEXT, output_hash TEXT, duration_ms INTEGER, timestamp REAL)")
+            cursor.execute("CREATE TABLE IF NOT EXISTS passenger_events (id INTEGER PRIMARY KEY AUTOINCREMENT, passenger_id TEXT, event_type TEXT, payload TEXT, timestamp REAL)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_pid ON passenger_events(passenger_id, id)")
             conn.commit()
 
     def save_passenger(self, passenger) -> bool:
@@ -123,6 +125,24 @@ class StateLayer:
             cursor.execute("SELECT passenger_id FROM passengers WHERE status NOT IN (?, ?)", ("completed", "failed"))
             rows = cursor.fetchall()
         return [r[0] for r in rows]
+
+    def append_event(self, passenger_id: str, event_type: str, payload: Dict = None):
+        """追加一条乘客事件（事件溯源：审计/回溯用）"""
+        with self._lock:
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            cursor.execute("INSERT INTO passenger_events (passenger_id, event_type, payload, timestamp) VALUES (?, ?, ?, ?)",
+                         (passenger_id, event_type, json.dumps(payload or {}, default=str), time.time()))
+            conn.commit()
+
+    def get_events(self, passenger_id: str, limit: int = 100) -> List[Dict]:
+        """按时间倒序取乘客事件轨迹"""
+        with self._lock:
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            cursor.execute("SELECT event_type, payload, timestamp FROM passenger_events WHERE passenger_id = ? ORDER BY id DESC LIMIT ?", (passenger_id, limit))
+            rows = cursor.fetchall()
+        return [{"event_type": r[0], "payload": json.loads(r[1]), "timestamp": r[2]} for r in rows]
 
     def load_active_passengers_full(self) -> List[Dict]:
         """加载所有未完成乘客的完整状态（用于崩溃恢复）"""

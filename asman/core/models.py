@@ -18,6 +18,7 @@ class PassengerStatus(Enum):
     SPLIT_WAITING = "split_waiting"
     TRANSFERING = "transfering"
     BACKLOOPING = "backlooping"
+    AWAITING_APPROVAL = "awaiting_approval"
     COMPLETED = "completed"
     FAILED = "failed"
 

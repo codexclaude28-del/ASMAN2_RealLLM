@@ -17,6 +17,9 @@ class HermesProfile:
     max_tokens: int = 2000
     skills: List[str] = field(default_factory=list)
     constraints: List[str] = field(default_factory=list)
+    role: str = ""           # CrewAI 式角色卡：role / goal / backstory
+    goal: str = ""
+    backstory: str = ""
 
 
 def profile_from_dict(name: str, data: Dict[str, Any]) -> HermesProfile:
@@ -28,6 +31,9 @@ def profile_from_dict(name: str, data: Dict[str, Any]) -> HermesProfile:
         max_tokens=data.get("max_tokens", 2000),
         skills=data.get("skills", []),
         constraints=data.get("constraints", []),
+        role=data.get("role", ""),
+        goal=data.get("goal", ""),
+        backstory=data.get("backstory", ""),
     )
 
 

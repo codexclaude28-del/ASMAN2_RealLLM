@@ -215,6 +215,7 @@ let wsConnection = null;
 // ========== 初始化 ==========
 async function init() {
   await checkHealth();
+  await loadTopology();
   await refreshDashboard();
   loadTheme();
 }
@@ -470,21 +471,21 @@ function updateDetailUI(data) {
 
 // ========== 渲染地铁线路图 ==========
 function renderMetroMap(data) {
-  const LINES = [
-    {id:'L1', name:'灵感线', color:'#f59e0b', stations:['S1','S2','H1']},
-    {id:'L2', name:'参考线', color:'#8b5cf6', stations:['R1','R2','R3','H2']},
-    {id:'L3', name:'创作线', color:'#3b82f6', stations:['W1','W2_SLICE','W3','W4','H3']},
-    {id:'L4', name:'发布线', color:'#10b981', stations:['P1','P2','P3_SLICE','H4']},
-    {id:'L5', name:'剧本线', color:'#f97316', stations:['D1','D2','D3_SLICE','H5']},
-    {id:'L6', name:'视频线', color:'#ec4899', stations:['V1','V2','V3','V4','V_END']},
-  ];
+  const topo = window._topology;
+  if (!topo || !topo.lines || !topo.lines.length) {
+    document.getElementById('metro-map').innerHTML = '<span class="text-gray-600 text-xs">拓扑加载中…</span>';
+    return;
+  }
 
   const completed = data.completed_stops || [];
   const current = data.current_station || '';
   const hermesWorkers = data.hermes_workers || {};
+  const COLORS = ['#f59e0b','#8b5cf6','#3b82f6','#10b981','#f97316','#ec4899','#14b8a6','#f43f5e'];
 
-  const html = LINES.map(line => {
-    const stationsHtml = line.stations.map(sid => {
+  const html = topo.lines.map((line, li) => {
+    const color = COLORS[li % COLORS.length];
+    const stationsHtml = line.stations.map(sc => {
+      const sid = sc.id;
       let cls, icon;
       if (completed.includes(sid)) {
         cls = 'bg-emerald-600 text-white';
@@ -492,17 +493,22 @@ function renderMetroMap(data) {
       } else if (sid === current) {
         cls = 'station-active bg-blue-600 text-white ring-2 ring-blue-400';
         icon = '🚇';
-      } else if (sid.startsWith('H')) {
+      } else if (sc.is_hub) {
         cls = 'bg-gray-700 text-gray-400';
         icon = '🔀';
+      } else if (sc.slice) {
+        cls = 'bg-indigo-800 text-indigo-300';
+        icon = '⊞';
       } else {
         cls = 'bg-gray-800 text-gray-600';
         icon = '○';
       }
 
-      // Worker 统计
       const worker = hermesWorkers[sid];
-      const tooltip = worker ? `title="执行:${worker.executions}次 成功率:${((worker.success_rate||0)*100).toFixed(0)}% 成本:$${(worker.cost||0).toFixed(3)}"` : '';
+      const waiting = sc.waiting > 0 ? ` | 等待${sc.waiting}` : '';
+      const tooltip = worker
+        ? `title="执行:${worker.executions}次 成功率:${((worker.success_rate||0)*100).toFixed(0)}% 成本:$${(worker.cost||0).toFixed(3)}${waiting}"`
+        : `title="${sc.agent || '终点'}${waiting}"`;
 
       return `<span ${tooltip} class="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${cls}">
         ${icon} ${sid}
@@ -510,12 +516,22 @@ function renderMetroMap(data) {
     }).join('<span class="text-gray-600 text-xs">→</span>');
 
     return `<div class="flex items-center gap-2 text-xs">
-      <span class="w-12 text-right flex-shrink-0" style="color:${line.color}">${line.name}</span>
+      <span class="w-12 text-right flex-shrink-0" style="color:${color}">${line.name}</span>
       <div class="flex items-center gap-1 flex-wrap">${stationsHtml}</div>
     </div>`;
   }).join('');
 
   document.getElementById('metro-map').innerHTML = html;
+}
+
+// ========== 加载拓扑 ==========
+async function loadTopology() {
+  try {
+    const res = await fetch(API + '/api/topology');
+    window._topology = await res.json();
+  } catch (e) {
+    console.warn('拓扑加载失败', e);
+  }
 }
 
 // ========== 加载产物 ==========

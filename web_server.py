@@ -183,6 +183,34 @@ async def get_task(task_id: str):
     }
 
 
+@app.get("/api/tasks/{task_id}/events")
+async def get_task_events(task_id: str):
+    """获取任务事件轨迹（审计/回溯）"""
+    if not engine:
+        return {"events": []}
+    return {"events": engine.get_events(task_id)}
+
+
+@app.post("/api/tasks/{task_id}/approve")
+async def approve_task(task_id: str):
+    """批准挂起的人工门控站点"""
+    if not engine:
+        raise HTTPException(503, "引擎未就绪")
+    if not await engine.approve(task_id):
+        raise HTTPException(400, "任务不在挂起状态")
+    return {"task_id": task_id, "status": "approved"}
+
+
+@app.post("/api/tasks/{task_id}/reject")
+async def reject_task(task_id: str, reason: str = ""):
+    """驳回挂起站点，触发回环"""
+    if not engine:
+        raise HTTPException(503, "引擎未就绪")
+    if not await engine.reject(task_id, reason):
+        raise HTTPException(400, "任务不在挂起状态")
+    return {"task_id": task_id, "status": "rejected"}
+
+
 @app.get("/api/tasks/{task_id}/output")
 async def get_task_output(task_id: str):
     """获取任务最终产物"""
@@ -236,6 +264,14 @@ async def get_metrics():
     if not engine:
         return {"metrics": {}}
     return {"metrics": engine.get_metrics()}
+
+
+@app.get("/api/topology")
+async def get_topology():
+    """获取网络拓扑（供可视化）"""
+    if not engine:
+        return {"name": "", "lines": [], "itinerary": []}
+    return engine.get_topology()
 
 
 # ================ WebSocket（实时进度推送） ================

@@ -35,3 +35,5 @@ class EngineConfig(BaseModel):
     judge: JudgeConfig = Field(default_factory=JudgeConfig)
     state_db: str = "asman_state.db"
     skill_db: str = "asman_skills.db"
+    worker_concurrency: int = 5   # 站点处理并发度
+    worker_mode: str = "local"    # local | distributed（distributed 预留，未实现）

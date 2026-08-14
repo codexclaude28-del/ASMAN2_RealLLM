@@ -12,7 +12,7 @@
 import asyncio
 import uuid
 import time
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 from .core.models import Passenger, Ticket, TaskConfig, PassengerStatus
 from .core.bootstrapper import Bootstrapper, DefaultBootstrapper
@@ -122,7 +122,8 @@ class MetroEngine:
         # 2. 解析拓扑配置并构建网络
         self.network_config = NetworkConfig(**self.config.network)
         self.network.build_from_config(self.network_config, self.backloop,
-                                       self.hub_manager, self.dispatcher)
+                                       self.hub_manager, self.dispatcher,
+                                       worker_concurrency=self.config.worker_concurrency)
         self.hub_manager.network = self.network
         self.convergence.network = self.network
         self.convergence.required_outputs = self._infer_required_outputs(self.network_config)
@@ -171,6 +172,8 @@ class MetroEngine:
 
         self.occ.register_passenger(passenger)
         self.state_layer.save_passenger(passenger)
+        self.state_layer.append_event(passenger.passenger_id, "created",
+                                      {"input": user_input})
         start = self.network.lines[itinerary.segments[0].line_id].stations[0]
         await start.platform.wait(passenger)
         self.state_layer.enqueue_to_platform(start.station_id, passenger.passenger_id,
@@ -247,6 +250,37 @@ class MetroEngine:
             logger.info("已从 SQLite 恢复 %d 个未完成乘客", recovered)
         return recovered
 
+    async def approve(self, passenger_id: str) -> bool:
+        """批准挂起的人工门控站点，继续行程"""
+        passenger = self.occ.get_passenger(passenger_id)
+        if not passenger or passenger.status != PassengerStatus.AWAITING_APPROVAL:
+            return False
+        station = self.network.get_station(passenger.current_location)
+        passenger.status = PassengerStatus.WAITING
+        if station:
+            await station._continue_journey(passenger)
+        self.state_layer.save_passenger(passenger)
+        self.state_layer.append_event(passenger_id, "approved",
+                                      {"station": passenger.current_location})
+        logger.info("人工审批通过: %s @ %s", passenger_id, passenger.current_location)
+        return True
+
+    async def reject(self, passenger_id: str, reason: str = "") -> bool:
+        """驳回挂起站点，触发回环"""
+        passenger = self.occ.get_passenger(passenger_id)
+        if not passenger or passenger.status != PassengerStatus.AWAITING_APPROVAL:
+            return False
+        station = self.network.get_station(passenger.current_location)
+        self.state_layer.append_event(passenger_id, "rejected",
+                                      {"station": passenger.current_location, "reason": reason})
+        if station:
+            await station._trigger_backloop(passenger, 0.0)
+        else:
+            passenger.status = PassengerStatus.FAILED
+        self.state_layer.save_passenger(passenger)
+        logger.info("人工审批驳回: %s @ %s (%s)", passenger_id, passenger.current_location, reason)
+        return True
+
     async def get_progress(self, task_id: str) -> Dict[str, Any]:
         passenger = self.occ.get_passenger(task_id)
         if not passenger:
@@ -293,6 +327,36 @@ class MetroEngine:
 
     def get_metrics(self) -> Dict:
         return self.metrics.snapshot()
+
+    def get_topology(self) -> Dict:
+        """返回网络拓扑结构（供可视化）：线路/站点/切片/换乘 + 站台繁忙度"""
+        if not self.network_config:
+            return {"name": "", "lines": [], "itinerary": []}
+
+        lines = []
+        for lc in self.network_config.lines:
+            stations = []
+            for sc in lc.stations:
+                station = self.network.get_station(sc.id)
+                stations.append({
+                    "id": sc.id,
+                    "is_hub": sc.is_hub,
+                    "slice": sc.slice,
+                    "reassemble_hub": sc.reassemble_hub,
+                    "agent": sc.agent,
+                    "backloop_target": station.backloop_target if station else None,
+                    "waiting": station.platform.get_waiting_count() if station else 0,
+                })
+            lines.append({"id": lc.id, "name": lc.name, "stations": stations})
+
+        itinerary = [{"line": s.line, "board": s.board, "alight": s.alight,
+                      "transfer": s.transfer} for s in self.network_config.itinerary]
+
+        return {"name": self.network_config.name, "lines": lines, "itinerary": itinerary}
+
+    def get_events(self, passenger_id: str) -> List[Dict]:
+        """返回乘客事件轨迹（事件溯源：审计/回溯）"""
+        return self.state_layer.get_events(passenger_id)
 
     def get_hermes_summary(self) -> Dict:
         return self.hermes_bridge.get_execution_summary()

@@ -81,7 +81,7 @@ class NovelBootstrapper:
             timeout_per_task=300,
             params={
                 "genre": genre,
-                "chapters": min(chapters, 50),  # Demo 限制 50 章
+                "chapters": min(chapters, 3),  # Demo 限制 3 章（快速验证切片并行）
                 "word_count_per_chapter": 3000,
                 "target_platforms": platforms,
                 "style": style,

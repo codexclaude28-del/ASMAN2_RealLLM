@@ -24,6 +24,8 @@ class StationConfig(BaseModel):
     slice: bool = False               # 是否切片站（agent 需实现 slice/merge）
     reassemble_hub: Optional[str] = None  # 切片站的重组 Hub
     backloop_target: Optional[str] = None  # 质检失败回环的上游站（默认同线前一个站）
+    gate: str = "auto"  # auto | manual（人工审批）
+    output_schema: Optional[Dict] = None  # 产出校验 schema（如 {required: [key1, key2]}）
 
 
 class LineConfig(BaseModel):
@@ -152,7 +154,8 @@ class MetroNetwork:
     def get_line(self, line_id: str) -> Optional[Line]:
         return self.lines.get(line_id)
 
-    def build_from_config(self, config: NetworkConfig, backloop, hub_manager, dispatcher):
+    def build_from_config(self, config: NetworkConfig, backloop, hub_manager, dispatcher,
+                          worker_concurrency: int = 5):
         """从 NetworkConfig 构建线路与站点"""
         for lc in config.lines:
             stations = []
@@ -163,12 +166,19 @@ class MetroNetwork:
                 backloop_target = sc.backloop_target or prev_id
 
                 if sc.is_hub:
-                    st = Station(sc.id, None, lc.id, is_hub=True, backloop_target=backloop_target)
+                    st = Station(sc.id, None, lc.id, is_hub=True,
+                                 backloop_target=backloop_target, gate=sc.gate,
+                                 output_schema=sc.output_schema,
+                                 processing_capacity=worker_concurrency)
                 elif sc.slice:
                     st = SliceStation(sc.id, agent, lc.id, sc.reassemble_hub,
-                                      backloop_target=backloop_target)
+                                      backloop_target=backloop_target, gate=sc.gate,
+                                      output_schema=sc.output_schema,
+                                      processing_capacity=worker_concurrency)
                 else:
-                    st = Station(sc.id, agent, lc.id, backloop_target=backloop_target)
+                    st = Station(sc.id, agent, lc.id, backloop_target=backloop_target,
+                                 gate=sc.gate, output_schema=sc.output_schema,
+                                 processing_capacity=worker_concurrency)
 
                 stations.append(st)
                 self.stations[st.station_id] = st
