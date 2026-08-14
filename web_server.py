@@ -96,6 +96,14 @@ model_store = ModelStore()
 project_store = ProjectStore()
 security = HTTPBearer(auto_error=False)
 
+# 计费额度模型（套餐 + 用量限制；商业化 P2 过渡版）
+PLANS = {
+    "free": {"label": "免费版", "max_tasks": 10, "max_cost_usd": 1.0},
+    "pro": {"label": "专业版", "max_tasks": 100, "max_cost_usd": 50.0},
+    "enterprise": {"label": "企业版", "max_tasks": None, "max_cost_usd": None},
+}
+CURRENT_PLAN = os.getenv("PLAN", "free")
+
 
 # ================ 应用生命周期 ================
 
@@ -219,6 +227,13 @@ async def create_task(req: CreateTaskRequest):
     if not engine:
         raise HTTPException(503, "引擎未就绪")
 
+    # 计费额度检查
+    plan = PLANS.get(CURRENT_PLAN, PLANS["free"])
+    if plan["max_tasks"] is not None:
+        created = engine.metrics.counters.get("tasks_created", 0)
+        if created >= plan["max_tasks"]:
+            raise HTTPException(403, f"已达 {plan['label']} 任务上限（{plan['max_tasks']}），请升级套餐")
+
     # 构建用户输入（包含详细参数）
     user_input = req.user_input
     if req.title:
@@ -236,7 +251,31 @@ async def create_task(req: CreateTaskRequest):
         "status": "running"
     }
 
+    # 任务完成时回调 Webhook（若配置了 WEBHOOK_URL）
+    webhook_url = os.getenv("WEBHOOK_URL", "")
+    if webhook_url:
+        asyncio.create_task(_watch_and_webhook(task_id, webhook_url))
+
     return {"task_id": task_id, "message": "任务已创建", "user_input": req.user_input[:100]}
+
+
+async def _watch_and_webhook(task_id: str, url: str):
+    """轮询任务直到完成，然后 POST 结果到 Webhook"""
+    import aiohttp
+    while True:
+        try:
+            progress = await engine.get_progress(task_id)
+            if progress["status"] in ("completed", "failed"):
+                async with aiohttp.ClientSession() as session:
+                    await session.post(url, json={
+                        "task_id": task_id,
+                        "status": progress["status"],
+                        "completed_stops": progress.get("completed_stops", []),
+                    })
+                break
+        except Exception:
+            pass
+        await asyncio.sleep(3)
 
 
 @app.get("/api/tasks")
@@ -394,6 +433,23 @@ async def get_metrics():
     return {"metrics": engine.get_metrics()}
 
 
+@app.get("/api/usage")
+async def get_usage():
+    """用量统计 + 计费额度"""
+    plan = PLANS.get(CURRENT_PLAN, PLANS["free"])
+    usage = {"plan": CURRENT_PLAN, "plan_label": plan["label"],
+             "max_tasks": plan["max_tasks"], "max_cost_usd": plan["max_cost_usd"]}
+    if engine:
+        m = engine.get_metrics()
+        usage["tasks_created"] = m["counters"].get("tasks_created", 0)
+        usage["tasks_completed"] = m["counters"].get("tasks_completed", 0)
+        usage["llm_calls"] = m["counters"].get("llm_calls", 0)
+        usage["llm_cost_usd"] = round(m["costs"].get("llm_cost_usd", 0), 6)
+        usage["retries"] = m["counters"].get("retries", 0)
+        usage["backloops"] = m["counters"].get("backloops", 0)
+    return usage
+
+
 @app.get("/api/topology")
 async def get_topology():
     """获取网络拓扑（供可视化）"""
@@ -422,6 +478,36 @@ async def put_network_config(req: NetworkConfigUpdate):
     save_yaml(str(here / "network.yaml"), req.network)
     save_yaml(str(here / "profiles.yaml"), req.profiles)
     return {"message": msg}
+
+
+@app.get("/api/templates")
+async def list_templates():
+    """模板列表（扫描 examples/ 目录）"""
+    examples_dir = Path(__file__).resolve().parent / "examples"
+    templates = []
+    for d in sorted(examples_dir.iterdir()):
+        if d.is_dir() and (d / "network.yaml").exists():
+            templates.append({"name": d.name, "has_profiles": (d / "profiles.yaml").exists()})
+    return {"templates": templates}
+
+
+@app.post("/api/templates/{name}/import")
+async def import_template(name: str):
+    """导入模板（替换当前 network+profiles 并热重载）"""
+    if not engine:
+        raise HTTPException(503, "引擎未就绪")
+    tpl_dir = Path(__file__).resolve().parent / "examples" / name
+    if not (tpl_dir / "network.yaml").exists():
+        raise HTTPException(404, "模板不存在")
+    network = load_yaml(str(tpl_dir / "network.yaml"))
+    profiles = load_yaml(str(tpl_dir / "profiles.yaml")) if (tpl_dir / "profiles.yaml").exists() else {}
+    ok, msg = engine.reload_network(network, profiles)
+    if not ok:
+        raise HTTPException(409, msg)
+    here = Path(__file__).resolve().parent / "examples" / "novel"
+    save_yaml(str(here / "network.yaml"), network)
+    save_yaml(str(here / "profiles.yaml"), profiles)
+    return {"message": f"已导入模板 {name}"}
 
 
 # ================ WebSocket（实时进度推送） ================

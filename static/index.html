@@ -79,6 +79,16 @@ tailwind.config = {
       </div>
     </div>
 
+    <!-- 用量与额度 -->
+    <div class="bg-gray-900 rounded-xl p-4 border border-gray-800 mb-6">
+      <div class="flex items-center justify-between text-xs text-gray-400 flex-wrap gap-2">
+        <span>📊 用量（套餐：<span id="usage-plan" class="text-blue-400">-</span>）</span>
+        <span>任务 <span id="usage-tasks" class="text-white">0</span>/<span id="usage-max" class="text-gray-500">∞</span>
+          · LLM 调用 <span id="usage-calls" class="text-white">0</span> 次
+          · 成本 $<span id="usage-cost" class="text-amber-400">0</span></span>
+      </div>
+    </div>
+
     <!-- 网络拓扑（SVG 地铁图） -->
     <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-3">网络拓扑</h2>
     <div class="bg-gray-900 rounded-xl p-4 border border-gray-800 mb-6 overflow-x-auto">
@@ -202,6 +212,10 @@ tailwind.config = {
       <input id="project-name" placeholder="项目名" class="bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-xs"/>
       <button onclick="addProject()" class="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-xs font-medium">添加项目</button>
     </div>
+
+    <!-- 模板市场 -->
+    <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mt-8 mb-3">🏪 模板市场</h2>
+    <div id="templates-list" class="space-y-2"></div>
   </div>
 
   <!-- ====== 任务详情弹窗 ====== -->
@@ -319,7 +333,7 @@ function switchTab(tab) {
 
   if (tab === 'dashboard') refreshDashboard();
   if (tab === 'history') loadHistory();
-  if (tab === 'editor') { loadEditor(); loadModels(); loadProjects(); }
+  if (tab === 'editor') { loadEditor(); loadModels(); loadProjects(); loadTemplates(); }
   if (tab === 'create') loadProjects();
 }
 
@@ -345,6 +359,8 @@ async function refreshDashboard() {
     const cost = data.hermes_summary?.total_cost_usd || 0;
     document.getElementById('stat-cost').textContent = '$' + cost.toFixed(3);
   } catch(e) {}
+
+  loadUsage();
 
   // 加载活跃任务
   try {
@@ -766,6 +782,49 @@ async function addProject() {
 async function deleteProject(id) {
   await fetch(API + '/api/projects/' + id, { method: 'DELETE' });
   loadProjects();
+}
+
+// ========== 模板市场 ==========
+async function loadTemplates() {
+  try {
+    const res = await fetch(API + '/api/templates');
+    const data = await res.json();
+    const el = document.getElementById('templates-list');
+    const templates = data.templates || [];
+    if (!templates.length) { el.innerHTML = '<p class="text-xs text-gray-600">暂无模板</p>'; return; }
+    el.innerHTML = templates.map(t => `
+      <div class="flex items-center justify-between px-3 py-2 rounded-lg bg-gray-800/50 border border-gray-700 text-xs">
+        <span>📦 ${t.name}${t.has_profiles ? ' · 含 Profile' : ''}</span>
+        <button onclick="importTemplate('${t.name}')" class="text-blue-400 hover:text-blue-300">导入</button>
+      </div>`).join('');
+  } catch(e) {}
+}
+
+async function importTemplate(name) {
+  try {
+    const res = await fetch(API + '/api/templates/' + name + '/import', { method: 'POST' });
+    if (res.ok) {
+      showToast('✅ 已导入模板 ' + name, 'success');
+      await loadTopology();
+      await loadEditor();
+    } else {
+      const data = await res.json();
+      showToast('⚠️ ' + (data.detail || '导入失败'), 'error');
+    }
+  } catch(e) { showToast('⚠️ 导入失败', 'error'); }
+}
+
+// ========== 用量统计 ==========
+async function loadUsage() {
+  try {
+    const res = await fetch(API + '/api/usage');
+    const u = await res.json();
+    document.getElementById('usage-plan').textContent = u.plan_label || u.plan || '-';
+    document.getElementById('usage-tasks').textContent = u.tasks_created || 0;
+    document.getElementById('usage-max').textContent = u.max_tasks === null ? '∞' : u.max_tasks;
+    document.getElementById('usage-calls').textContent = u.llm_calls || 0;
+    document.getElementById('usage-cost').textContent = (u.llm_cost_usd || 0).toFixed(4);
+  } catch(e) {}
 }
 
 // ========== WebSocket 连接 ==========
