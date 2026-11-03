@@ -55,6 +55,8 @@ class HubManager:
     def __init__(self):
         self.hubs: Dict[str, Station] = {}
         self.network = None  # 由 engine.build_network 注入
+        # 父乘客ID → 切片站（子乘客到站 O(1) 匹配，由 SliceStation 注册/注销）
+        self.parent_index: Dict[str, Station] = {}
 
     def register_hub(self, station: Station):
         self.hubs[station.station_id] = station
@@ -68,14 +70,12 @@ class HubManager:
         if not hub:
             return
 
-        # 子乘客到达 Hub：通知父切片站进行重组追踪
+        # 子乘客到达 Hub：按 parent_id 索引直接找到父切片站，通知重组追踪
         if getattr(passenger, 'is_sub', False) and passenger.parent_id:
-            parent_id = passenger.parent_id
-            if self.network:
-                for s in self.network.stations.values():
-                    if hasattr(s, 'parent_tracking') and parent_id in s.parent_tracking:
-                        await s.on_sub_passenger_arrive(passenger)
-                        return  # 子乘客不换乘，等重组
+            tracker = self.parent_index.get(passenger.parent_id)
+            if tracker is not None:
+                await tracker.on_sub_passenger_arrive(passenger)
+                return  # 子乘客不换乘，等重组
 
         # 检查是否有下一段行程，且下一段属于不同线路
         next_seg = passenger.itinerary.next_segment()
@@ -98,7 +98,6 @@ class TrainDispatcher:
 
     def __init__(self):
         self.urgent_queue: List[str] = []
-        self.agent_switches: Dict[str, str] = {}
 
     def should_dispatch(self, line: Line) -> bool:
         return line.get_total_waiting() > 0
@@ -113,12 +112,6 @@ class TrainDispatcher:
 
     async def urgent_dispatch(self, line_id: str):
         self.urgent_queue.append(line_id)
-
-    async def switch_agent(self, old_agent_id: str, new_agent_id: str):
-        self.agent_switches[old_agent_id] = new_agent_id
-
-    async def degrade_agent(self, agent_id: str):
-        pass
 
 
 class OCC:

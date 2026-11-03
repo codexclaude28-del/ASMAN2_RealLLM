@@ -4,8 +4,6 @@ ASMAN Convergence Engine
 """
 
 import asyncio
-import time
-from typing import Dict, Any, List
 from .models import Passenger, PassengerStatus
 
 
@@ -94,29 +92,3 @@ class ConvergenceEngine:
         if progress < 50:
             return "预计3-5分钟"
         return "预计1-2分钟"
-
-    async def deliver(self, passenger: Passenger) -> Dict[str, Any]:
-        """自动交付最终产物"""
-        outputs = {
-            "novel": passenger.baggage.get("merged_W2_SLICE", {}),
-            "script": passenger.baggage.get("merged_D3_SLICE", {}),
-            "videos": passenger.baggage.get("video_outputs", []),
-            "publish_status": passenger.baggage.get("merged_P3_SLICE", {}),
-            "report": self._generate_report(passenger)
-        }
-
-        passenger.status = PassengerStatus.COMPLETED
-        return outputs
-
-    def _generate_report(self, passenger: Passenger) -> Dict:
-        """生成执行报告"""
-        return {
-            "task_id": passenger.passenger_id,
-            "title": passenger.ticket.config.title,
-            "genre": (passenger.ticket.config.params or {}).get("genre", ""),
-            "total_stations_visited": len(passenger.completed_stops),
-            "total_fixes": len(passenger.fix_history),
-            "quality_scores": {k: v.average() for k, v in passenger.quality_scores.items()},
-            "execution_time": time.time() - passenger.created_at,
-            "status": "completed"
-        }

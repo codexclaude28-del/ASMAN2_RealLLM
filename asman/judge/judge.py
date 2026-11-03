@@ -81,6 +81,33 @@ class LLMJudge:
         return scores
 
     def _heuristic_evaluate(self, output: Any) -> QualityScores:
-        """启发式兜底评分：产出非空则稳定通过，保证流程不卡死"""
-        base = 0.86 if output else 0.60
-        return QualityScores(base, base, base, base, base)
+        """启发式兜底评分：基于产出内容的确定性打分（空/过短产出低分，
+        结构越完整分越高），保证分数随质量真实变化且流程不卡死"""
+        score = self._content_score(output)
+        return QualityScores(score, score, score, score, score)
+
+    @staticmethod
+    def _content_score(output: Any) -> float:
+        if output is None:
+            return 0.30
+        if isinstance(output, dict):
+            if not output:
+                return 0.30
+            non_empty = sum(1 for v in output.values() if v not in (None, "", [], {}))
+            if non_empty == 0:
+                return 0.40
+            size = len(json.dumps(output, ensure_ascii=False, default=str))
+            score = 0.85 + 0.03 * min(non_empty - 1, 3)  # 结构完整性
+            if size >= 200:
+                score += 0.04                              # 内容充实度
+            return min(score, 0.95)
+        if isinstance(output, str):
+            n = len(output.strip())
+            if n == 0:
+                return 0.30
+            if n < 20:
+                return 0.60
+            if n < 100:
+                return 0.80
+            return 0.90
+        return 0.70

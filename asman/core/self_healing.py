@@ -5,8 +5,11 @@ ASMAN Self-Healing Scheduler
 
 import asyncio
 import time
-from typing import Dict, List, Optional, Any
+from typing import Dict
 from .models import Passenger, PassengerStatus
+from ..runtime.logging import get_logger
+
+logger = get_logger("asman.self_healing")
 
 
 class AgentHealth:
@@ -27,9 +30,8 @@ class AgentHealth:
         return self.success_requests / self.total_requests
 
     def is_healthy(self) -> bool:
+        # 心跳按处理请求上报：空闲不等于不健康，只看连续失败与熔断标记
         if not self.healthy:
-            return False
-        if time.time() - self.last_heartbeat > 30:  # 30秒无心跳
             return False
         if self.failure_count > 5:
             return False
@@ -54,7 +56,7 @@ class SelfHealingScheduler:
         self.agent_health[agent_id] = AgentHealth(agent_id, capability)
 
     async def heartbeat(self, agent_id: str, success: bool = True):
-        """Agent心跳上报"""
+        """Agent心跳上报（由站点处理路径在每次执行后调用）"""
         health = self.agent_health.get(agent_id)
         if health:
             health.last_heartbeat = time.time()
@@ -62,6 +64,7 @@ class SelfHealingScheduler:
             if success:
                 health.success_requests += 1
                 health.failure_count = 0
+                health.healthy = True  # 成功心跳自动解除熔断
             else:
                 health.failure_count += 1
 
@@ -96,26 +99,11 @@ class SelfHealingScheduler:
                 await self._heal_congestion(hub)
 
     async def _heal_agent(self, agent_id: str, health: AgentHealth):
-        """Agent故障自愈"""
-        # 策略1：标记不健康，触发切换
+        """Agent故障自愈：熔断标记 + 告警，后续成功心跳自动恢复"""
         health.healthy = False
-
-        # 找到同能力的备用Agent
-        backup = self._find_backup(health.capability, exclude=agent_id)
-        if backup:
-            await self.dispatcher.switch_agent(agent_id, backup)
-            health.healthy = True
-            health.failure_count = 0
-        else:
-            # 策略2：降级处理
-            await self.dispatcher.degrade_agent(agent_id)
-
-    def _find_backup(self, capability: str, exclude: str) -> Optional[str]:
-        """查找同能力备用Agent"""
-        for agent_id, health in self.agent_health.items():
-            if agent_id != exclude and health.capability == capability and health.is_healthy():
-                return agent_id
-        return None
+        logger.warning("Agent %s 不健康（连续失败 %d 次，成功率 %.2f），已熔断标记，"
+                       "等待成功心跳自动恢复",
+                       agent_id, health.failure_count, health.success_rate)
 
     async def _check_stalled_tracking(self, station):
         """检查卡住的切片追踪"""

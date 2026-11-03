@@ -17,13 +17,18 @@ class StateLayer:
         self._init_db()
 
     def _init_db(self):
+        # 自增主键按后端方言生成：SQLite 用 AUTOINCREMENT，PostgreSQL 用 IDENTITY
+        if isinstance(self.db, SQLiteBackend):
+            auto_id = "INTEGER PRIMARY KEY AUTOINCREMENT"
+        else:
+            auto_id = "INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY"
         self.db.execute("CREATE TABLE IF NOT EXISTS passengers (passenger_id TEXT PRIMARY KEY, parent_id TEXT, status TEXT, current_location TEXT, line_id TEXT, segment_idx INTEGER, completed_stops TEXT, baggage TEXT, priority INTEGER, created_at REAL, updated_at REAL)")
         self.db.execute("CREATE TABLE IF NOT EXISTS slice_tracking (parent_id TEXT PRIMARY KEY, station_id TEXT, total INTEGER, arrived INTEGER, results TEXT, start_time REAL, status TEXT)")
-        self.db.execute("CREATE TABLE IF NOT EXISTS platform_queue (id INTEGER PRIMARY KEY AUTOINCREMENT, station_id TEXT, passenger_id TEXT, priority INTEGER, enqueued_at REAL)")
+        self.db.execute(f"CREATE TABLE IF NOT EXISTS platform_queue (id {auto_id}, station_id TEXT, passenger_id TEXT, priority INTEGER, enqueued_at REAL)")
         self.db.execute("CREATE TABLE IF NOT EXISTS hub_transfer (hub_id TEXT, passenger_id TEXT, from_line TEXT, to_line TEXT, arrived_at REAL)")
         self.db.execute("CREATE TABLE IF NOT EXISTS checkpoints (checkpoint_id TEXT PRIMARY KEY, passenger_id TEXT, state_snapshot TEXT, created_at REAL)")
-        self.db.execute("CREATE TABLE IF NOT EXISTS execution_log (id INTEGER PRIMARY KEY AUTOINCREMENT, passenger_id TEXT, station_id TEXT, action TEXT, input_hash TEXT, output_hash TEXT, duration_ms INTEGER, timestamp REAL)")
-        self.db.execute("CREATE TABLE IF NOT EXISTS passenger_events (id INTEGER PRIMARY KEY AUTOINCREMENT, passenger_id TEXT, event_type TEXT, payload TEXT, timestamp REAL)")
+        self.db.execute(f"CREATE TABLE IF NOT EXISTS execution_log (id {auto_id}, passenger_id TEXT, station_id TEXT, action TEXT, input_hash TEXT, output_hash TEXT, duration_ms INTEGER, timestamp REAL)")
+        self.db.execute(f"CREATE TABLE IF NOT EXISTS passenger_events (id {auto_id}, passenger_id TEXT, event_type TEXT, payload TEXT, timestamp REAL)")
         # SQLite 专属索引（PostgreSQL 会因语法不同而忽略失败，容错）
         if isinstance(self.db, SQLiteBackend):
             try:

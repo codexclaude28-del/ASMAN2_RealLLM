@@ -39,7 +39,7 @@ class Line:
                 train = dispatcher.assign_train(self)
                 if train:
                     asyncio.create_task(self._run_train_safe(train, hub_manager))
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.1)  # 小 tick 轮询站台（乘客处理已异步化，无需长间隔）
 
     async def _run_train_safe(self, train, hub_manager):
         try:
@@ -59,14 +59,13 @@ class Line:
         # 计算路线
         train.route_stops = self._compute_route(train)
 
+        # 每站都停：下车是异步派发的，处理完的乘客会在列车过后才回到站台，
+        # 后续列车必须能在任意站停靠接人（不能只停车上乘客的目的站）
         for station in self.stations:
-            if station.station_id not in train.route_stops and not station.is_hub:
-                continue
-
             train.current_station = station.station_id
             train.status = TrainStatus.ARRIVED
 
-            # 下车
+            # 下车（异步派发处理，列车不停站等待）
             await station.handle_alighting(train, hub_manager)
 
             # 上车
@@ -76,7 +75,6 @@ class Line:
             train.route_stops = self._compute_route(train)
 
             train.status = TrainStatus.RUNNING
-            await asyncio.sleep(0.3)
 
         train.status = TrainStatus.IDLE
 

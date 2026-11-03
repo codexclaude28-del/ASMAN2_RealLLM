@@ -4,6 +4,7 @@
 """
 
 import time
+import uuid
 from typing import Dict, Any, List, Optional
 
 from ..runtime.db import make_backend, DBBackend, SQLiteBackend
@@ -24,7 +25,8 @@ class SkillLibrary:
     def store_skill(self, capability: str, profile: str, description: str,
                     prompt_template: str, tags: List[str],
                     success_rate: float = 0.0, avg_score: float = 0.0) -> str:
-        skill_id = f"sk_{capability}_{profile}_{int(time.time())}"
+        # 秒级时间戳在并发提取下会撞主键，加 uuid 后缀保证唯一
+        skill_id = f"sk_{capability}_{profile}_{int(time.time())}_{uuid.uuid4().hex[:6]}"
         self.db.execute("INSERT INTO skills (skill_id, capability, profile, description, prompt_template, success_rate, usage_count, avg_score, created_at, last_used, version, parent_skill_id, evolution_notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                       (skill_id, capability, profile, description, prompt_template, success_rate, 0, avg_score, time.time(), time.time(), 1, "", ""))
         if self._is_sqlite:

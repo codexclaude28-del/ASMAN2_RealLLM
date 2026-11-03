@@ -55,11 +55,14 @@ class SliceStation(Station):
             "station_id": self.station_id
         }
         self.parent_tracking[passenger.passenger_id] = tracking
+        # 注册到 HubManager 的父乘客索引（子乘客到站 O(1) 匹配）
+        if self.hub_manager is not None:
+            self.hub_manager.parent_index[passenger.passenger_id] = self
 
         # 持久化切片追踪 (Loop Eng. State外部化)
         if self.state_layer:
-            self.state_layer.save_slice_tracking(passenger.passenger_id, tracking)
-            self.state_layer.save_passenger(passenger)
+            await self._db(self.state_layer.save_slice_tracking, passenger.passenger_id, tracking)
+            await self._db(self.state_layer.save_passenger, passenger)
 
         # 4. 创建子乘客
         for slice_data in slices:
@@ -82,8 +85,9 @@ class SliceStation(Station):
 
             # 持久化子乘客
             if self.state_layer:
-                self.state_layer.save_passenger(sub)
-                self.state_layer.enqueue_to_platform(self.station_id, sub_id, sub.priority)
+                await self._db(self.state_layer.save_passenger, sub)
+                await self._db(self.state_layer.enqueue_to_platform,
+                               self.station_id, sub_id, sub.priority)
 
         # 5. 触发紧急调度
         if self.dispatcher:
@@ -100,16 +104,32 @@ class SliceStation(Station):
         tracking["results"].append({
             "sub_id": sub_passenger.passenger_id,
             "slice_id": sub_passenger.slice_id,
-            "output": sub_passenger.baggage.get(f"output_{self.reassemble_hub}", 
-                      sub_passenger.baggage.get("output_W3", {}))
+            "output": self._latest_sub_output(sub_passenger)
         })
 
         # 持久化更新
         if self.state_layer:
-            self.state_layer.save_slice_tracking(parent_id, tracking)
+            await self._db(self.state_layer.save_slice_tracking, parent_id, tracking)
 
         if tracking["arrived"] >= tracking["total"]:
             await self.reassemble(parent_id)
+
+    def _latest_sub_output(self, sub_passenger: SubPassenger) -> Dict:
+        """取子乘客的上游最近产物（通用逻辑，不写死业务站点键）
+
+        优先重组 Hub 的产出；否则按已完成站点倒序找最近的 output_* 产物。
+        """
+        hub_key = f"output_{self.reassemble_hub}"
+        if hub_key in sub_passenger.baggage:
+            return sub_passenger.baggage[hub_key]
+        for stop in reversed(sub_passenger.completed_stops):
+            key = f"output_{stop}"
+            if key in sub_passenger.baggage:
+                return sub_passenger.baggage[key]
+        for key in reversed(list(sub_passenger.baggage.keys())):
+            if key.startswith("output_"):
+                return sub_passenger.baggage[key]
+        return {}
 
     async def reassemble(self, parent_id: str):
         """重组所有子乘客"""
@@ -118,14 +138,17 @@ class SliceStation(Station):
 
         tracking = self.parent_tracking.pop(parent_id)
         parent = tracking["parent_passenger"]
+        if self.hub_manager is not None:
+            self.hub_manager.parent_index.pop(parent_id, None)
 
         # 1. Agent合并
         merged = await self.agent.merge(tracking["results"])
         parent.baggage[f"merged_{self.station_id}"] = merged
 
         if self.state_layer:
-            self.state_layer.append_event(parent.passenger_id, "slice_reassembled",
-                                          {"station": self.station_id, "subs": tracking["total"]})
+            await self._db(self.state_layer.append_event, parent.passenger_id,
+                           "slice_reassembled",
+                           {"station": self.station_id, "subs": tracking["total"]})
 
         # 2. 恢复主乘客（completed_stops 已在 handle_alighting 记录过，此处不重复）
         parent.status = PassengerStatus.WAITING
@@ -152,16 +175,21 @@ class SliceStation(Station):
 
         # 5. 持久化
         if self.state_layer:
-            self.state_layer.save_passenger(parent)
+            await self._db(self.state_layer.save_passenger, parent)
 
-        # 6. Skill提取: 重组成功模式存入Skill库
+        # 6. Skill提取: 重组成功模式存入Skill库（非关键路径，失败只记录）
         if self.skill_library and merged:
-            params = getattr(parent.ticket.config, "params", {}) or {}
-            profile_key = params.get("genre", "default") if isinstance(params, dict) else "default"
-            self.skill_library.extract_skill_from_success(
-                capability="slice_merge",
-                profile=profile_key,
-                prompt=str(self.station_id),
-                output=merged,
-                score=0.95
-            )
+            try:
+                params = getattr(parent.ticket.config, "params", {}) or {}
+                profile_key = params.get("genre", "default") if isinstance(params, dict) else "default"
+                await asyncio.to_thread(
+                    self.skill_library.extract_skill_from_success,
+                    capability="slice_merge",
+                    profile=profile_key,
+                    prompt=str(self.station_id),
+                    output=merged,
+                    score=0.95
+                )
+            except Exception as e:
+                import logging
+                logging.getLogger("asman.station").warning("重组Skill提取失败: %s", e)

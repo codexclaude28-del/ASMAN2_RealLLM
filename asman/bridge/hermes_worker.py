@@ -4,7 +4,6 @@ ASMAN-Hermes Bridge Worker
 """
 
 import asyncio
-import random
 import time
 import json
 from typing import Dict, Any
@@ -131,23 +130,47 @@ class HermesWorker:
             return {"content": content, "raw": True}
 
     def _validate(self, result: Any) -> Dict:
-        """应用constraints验证结果"""
-        score = random.uniform(0.82, 0.98)
-
-        # 如果结果有效（非空dict或非空str），给合格分
-        if isinstance(result, dict) and result:
-            # 有有效输出，分数保持高位
-            score = max(score, 0.80)
-        elif isinstance(result, str) and len(result) > 20:
-            score = max(score, 0.78)
-
-        passed = score >= 0.75  # 降低阈值，避免mock响应被误判
+        """确定性启发式校验：按产出内容打分（0~1），低质产出真的不通过"""
+        violations = []
+        if isinstance(result, dict):
+            if not result:
+                score = 0.30
+                violations.append("空产出")
+            else:
+                non_empty = sum(1 for v in result.values() if v not in (None, "", [], {}))
+                if non_empty == 0:
+                    score = 0.40
+                    violations.append("所有字段为空")
+                else:
+                    score = 0.75 + 0.05 * min(non_empty, 4)  # 结构完整性
+                    size = len(json.dumps(result, ensure_ascii=False, default=str))
+                    if size >= 200:
+                        score += 0.05                        # 内容充实度
+                    elif size < 30:
+                        score -= 0.15
+                        violations.append("产出内容过少")
+                    score = max(0.0, min(1.0, score))
+        elif isinstance(result, str):
+            n = len(result.strip())
+            if n >= 100:
+                score = 0.90
+            elif n >= 20:
+                score = 0.78
+            elif n > 0:
+                score = 0.55
+                violations.append("文本过短")
+            else:
+                score = 0.30
+                violations.append("空产出")
+        else:
+            score = 0.30
+            violations.append("产出类型无效")
 
         return {
-            "passed": passed,
-            "score": score,
+            "passed": score >= 0.75,
+            "score": round(score, 3),
             "constraints_checked": len(self.profile.constraints),
-            "violations": []
+            "violations": violations
         }
 
     async def _mock_execute(self, input_data: Dict) -> Dict:

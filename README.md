@@ -122,11 +122,22 @@ task_id = await engine.run("你的输入")
 | `profiles` | Profile 配置 dict（来自 profiles.yaml） |
 | `llm` | 主 LLM（provider/api_key/base_url/default_model） |
 | `judge` | 评判 LLM（enabled/provider/model/temperature/threshold） |
+| `moa_verifiers` | MoA 评判采样数（默认 1；>1 时多温度采样、去最高最低取中位数） |
 | `state_db` / `skill_db` | SQLite 路径 |
 
 ### `JudgeConfig`（LLM-as-Judge）
 
-独立于生成模型的质检。`enabled=true` 时用独立 `LLMClient`（`provider` 留空则复用主 LLM）对每个站点产出做五维评分（coherence/creativity/consistency/grammar/engagement），`threshold` 为通过线。mock/调用失败时降级启发式评分，保证流程不阻塞。
+独立于生成模型的质检。`enabled=true` 时用独立 `LLMClient`（`provider` 留空则复用主 LLM）对每个站点产出做五维评分（coherence/creativity/consistency/grammar/engagement）。`threshold` 作为新任务 `quality_threshold` 的默认值——站点质检的权威阈值是 `ticket.config.quality_threshold`（`TaskConfig.quality_threshold`，业务可在 bootstrapper 里按任务覆盖）。mock/调用失败时降级为基于内容的确定性启发式评分（空/过短产出低分，可真实触发重试/回环），保证流程不阻塞。
+
+### `TaskConfig`（任务级，bootstrapper 产出）
+
+| 字段 | 说明 |
+|------|------|
+| `quality_threshold` | 质检通过阈值（站点权威来源，默认 0.85） |
+| `max_retry` | 站内重试上限（默认 3），耗尽后坐回环线 |
+| `max_backloops` | 单乘客最大回环次数（默认 3），超限标记 FAILED（死循环保护） |
+| `timeout_per_task` | 任务超时秒数（自愈体检用） |
+| `params` | 业务自定义参数 |
 
 ---
 
@@ -149,7 +160,7 @@ asman/
 └── engine.py    MetroEngine（主引擎）
 ```
 
-**核心机制**：站点出站 = LLM 生成 → LLM-as-Judge 评分 → 达标放行 / 未达标重试(≤max_retry) / 重试耗尽坐回环线到 `backloop_target`。收敛需满足六条件：子乘客重组完、质检全过、回环收敛、产物齐全、无挂起重试、**行程走完**。
+**核心机制**：乘客到站后处理异步化——列车摘下乘客即开往下一站，站点处理（LLM 调用）在后台任务中并发执行（受站点 Semaphore 控并发），处理完成后乘客自行回到站台等下一班车。站点出站 = LLM 生成 → LLM-as-Judge 评分 → 达标放行 / 未达标重试(≤max_retry) / 重试耗尽坐回环线到 `backloop_target`；单乘客回环超过 `max_backloops` 次标记 FAILED（死循环保护）。收敛需满足六条件：子乘客重组完、质检全过、回环收敛、产物齐全、无挂起重试、**行程走完**。
 
 ---
 
@@ -169,7 +180,7 @@ pip install pytest pytest-asyncio
 python -m pytest tests/ -v
 ```
 
-覆盖：核心模型、拓扑配置解析、注册表、Judge 评分、收敛、回环、mock 全流程集成。
+覆盖：核心模型、拓扑配置解析、注册表、Judge 评分、收敛、回环、并发处理（同站多乘客并行）、mock 全流程集成。
 
 ---
 

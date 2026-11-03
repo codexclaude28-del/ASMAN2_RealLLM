@@ -63,6 +63,7 @@ class Station:
         self.semaphore = asyncio.Semaphore(self.processing_capacity)
         self.quality_gate = QualityGate(station_id)
         self.worker = LocalStationWorker()  # 分布式扩展点（可替换为 DistributedWorker）
+        self._pending_tasks = set()  # 到站处理的异步任务引用（防 GC）
 
         # 融合模块注入点
         self.occ = None
@@ -76,6 +77,7 @@ class Station:
         self.hermes_bridge = None  # Hermes桥接器
         self.metrics = None
         self.artifact_store = None
+        self.self_healing = None
 
     async def handle_boarding(self, train):
         available = train.capacity - len(train.passengers)
@@ -85,6 +87,19 @@ class Station:
         for p in boarding:
             train.passengers.append(p)
 
+    @staticmethod
+    async def _db(fn, *args):
+        """同步 DB 调用放到 worker 线程执行，避免阻塞事件循环"""
+        await asyncio.to_thread(fn, *args)
+
+    async def _heartbeat(self, success: bool):
+        """向自愈调度器上报心跳（按站点注册，成功/失败）"""
+        if self.self_healing and self.agent is not None:
+            try:
+                await self.self_healing.heartbeat(self.station_id, success)
+            except Exception:
+                pass
+
     async def handle_alighting(self, train, hub_manager):
         alighting = [p for p in train.passengers if p.should_alight_at(self.station_id)]
         for p in alighting:
@@ -93,14 +108,29 @@ class Station:
             p.completed_stops.append(self.station_id)
 
             if self.state_layer:
-                self.state_layer.save_passenger(p)
-                self.state_layer.append_event(p.passenger_id, "station_entered",
-                                              {"station": self.station_id})
+                await self._db(self.state_layer.save_passenger, p)
+                await self._db(self.state_layer.append_event, p.passenger_id,
+                               "station_entered", {"station": self.station_id})
 
+            # 到站即派发：处理异步化（LLM 调用在后台任务中执行），
+            # 列车不停站等待，继续向下一站行驶；
+            # 乘客处理完成后自行进入下一站站台队列（见 _continue_journey）
+            task = asyncio.create_task(self._process_alighted(p, hub_manager))
+            self._pending_tasks.add(task)
+            task.add_done_callback(self._pending_tasks.discard)
+
+    async def _process_alighted(self, passenger: Passenger, hub_manager):
+        """到站乘客的异步处理入口（Hub 换乘 / 站点加工）"""
+        try:
             if self.is_hub:
-                await hub_manager.handle_arrival(p, self)
+                await hub_manager.handle_arrival(passenger, self)
             else:
-                await self.worker.process(self, p)
+                await self.worker.process(self, passenger)
+        except Exception as e:
+            logger.error("到站处理派发异常: %s", e)
+            passenger.status = PassengerStatus.FAILED
+            if self.state_layer:
+                await self._db(self.state_layer.save_passenger, passenger)
 
     async def process_passenger(self, passenger: Passenger):
         async with self.semaphore:
@@ -119,11 +149,11 @@ class Station:
                 return
 
             if self.state_layer:
-                self.state_layer.save_passenger(passenger)
+                await self._db(self.state_layer.save_passenger, passenger)
 
             try:
                 # ==== 核心：通过Hermes Bridge调用Profile Worker ====
-                # 30s超时 + 自动降级到本地Agent，确保管道不阻塞
+                # 120s超时 + 自动降级到本地Agent，确保管道不阻塞
                 if self.hermes_bridge and self.hermes_bridge.llm_client.provider != "mock":
                     try:
                         result = await asyncio.wait_for(
@@ -137,6 +167,7 @@ class Station:
                     result = await self._execute_local(passenger)
 
                 passenger.baggage[f"output_{self.station_id}"] = result
+                await self._heartbeat(True)
 
                 # 产出 schema 校验（不符合 → 直接回环）
                 schema_ok, missing = self._validate_output(result)
@@ -148,9 +179,12 @@ class Station:
                 # MoA独立验证
                 avg_score = await self._verify_with_moa(result, passenger)
 
-                # Skill提取
+                # Skill提取（非关键路径：失败只记录，不影响乘客流转）
                 if self.skill_library and avg_score >= 0.9:
-                    self._extract_skill(result, passenger)
+                    try:
+                        await asyncio.to_thread(self._extract_skill, result, passenger)
+                    except Exception as e:
+                        logger.warning("Skill提取失败: %s", e)
 
                 # 判断质检结果
                 threshold = passenger.ticket.config.quality_threshold
@@ -171,7 +205,7 @@ class Station:
                         passenger.status = PassengerStatus.WAITING
                         await self.platform.wait(passenger)
                         if self.state_layer:
-                            self.state_layer.save_passenger(passenger)
+                            await self._db(self.state_layer.save_passenger, passenger)
                     else:
                         await self._trigger_backloop(passenger, avg_score)
 
@@ -181,8 +215,9 @@ class Station:
                 traceback.print_exc()
                 passenger.baggage[f"error_{self.station_id}"] = str(e)
                 passenger.status = PassengerStatus.FAILED
+                await self._heartbeat(False)
                 if self.state_layer:
-                    self.state_layer.save_passenger(passenger)
+                    await self._db(self.state_layer.save_passenger, passenger)
             finally:
                 passenger_id_var.reset(pid_token)
                 station_id_var.reset(st_token)
@@ -260,11 +295,11 @@ class Station:
                 if self.metrics:
                     self.metrics.incr("tasks_completed")
                 if self.state_layer:
-                    self.state_layer.append_event(passenger.passenger_id, "delivered",
-                                                  {"station": self.station_id})
+                    await self._db(self.state_layer.append_event, passenger.passenger_id,
+                                   "delivered", {"station": self.station_id})
                 self._store_artifacts(passenger)
         if self.state_layer:
-            self.state_layer.save_passenger(passenger)
+            await self._db(self.state_layer.save_passenger, passenger)
 
     def _store_artifacts(self, passenger):
         """把产物落地到内容存储层（解决「内容只存 SQLite」的隐患）"""
@@ -292,16 +327,29 @@ class Station:
         """人工门控：挂起等待外部 approve/reject"""
         passenger.status = PassengerStatus.AWAITING_APPROVAL
         if self.state_layer:
-            self.state_layer.save_passenger(passenger)
-            self.state_layer.append_event(passenger.passenger_id, "awaiting_approval",
-                                          {"station": self.station_id})
+            await self._db(self.state_layer.save_passenger, passenger)
+            await self._db(self.state_layer.append_event, passenger.passenger_id,
+                           "awaiting_approval", {"station": self.station_id})
         logger.info("站点产出挂起，等待人工审批")
 
     async def _trigger_backloop(self, passenger: Passenger, score: float):
+        # 全局死循环保护：单乘客回环次数超上限 → 标记 FAILED
+        max_backloops = getattr(passenger.ticket.config, "max_backloops", 3) \
+            if passenger.ticket and passenger.ticket.config else 3
+        if len(passenger.fix_history) >= max_backloops:
+            logger.warning("乘客回环次数达上限(%d)，标记 FAILED", max_backloops)
+            passenger.status = PassengerStatus.FAILED
+            if self.state_layer:
+                await self._db(self.state_layer.append_event, passenger.passenger_id,
+                               "backloop_limit", {"station": self.station_id,
+                                                  "max_backloops": max_backloops})
+                await self._db(self.state_layer.save_passenger, passenger)
+            return
+
         if not self.backloop:
             passenger.status = PassengerStatus.FAILED
             if self.state_layer:
-                self.state_layer.save_passenger(passenger)
+                await self._db(self.state_layer.save_passenger, passenger)
             return
 
         scores = passenger.quality_scores.get(self.station_id)
@@ -311,8 +359,9 @@ class Station:
         if self.metrics:
             self.metrics.incr("backloops")
         if self.state_layer:
-            self.state_layer.append_event(passenger.passenger_id, "backloop",
-                                          {"from": self.station_id, "to": target, "weakest": weakest})
+            await self._db(self.state_layer.append_event, passenger.passenger_id,
+                           "backloop",
+                           {"from": self.station_id, "to": target, "weakest": weakest})
 
         await self.backloop.send_back(
             passenger=passenger,

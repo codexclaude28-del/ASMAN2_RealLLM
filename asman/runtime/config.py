@@ -29,7 +29,8 @@ class JudgeConfig(BaseModel):
     base_url: str = ""
     model: str = ""             # 空 → 用 provider 默认
     temperature: float = 0.2    # judge 用低温，输出更稳定
-    threshold: float = 0.85     # 质检通过阈值
+    threshold: float = 0.85     # 质检通过阈值（作为新任务 quality_threshold 的默认值；
+                                # 站点实际以 ticket.config.quality_threshold 为准）
     max_tokens: int = 500
 
 
@@ -43,5 +44,6 @@ class EngineConfig(BaseModel):
     dsn: str = ""                 # PostgreSQL DSN（postgres://...），空则用 SQLite
     worker_concurrency: int = 5   # 站点处理并发度
     worker_mode: str = "local"    # local | distributed（distributed 预留，未实现）
+    moa_verifiers: int = 1        # MoA 评判采样数（>1 时多温度采样取中位数）
     artifact_dir: str = "artifacts"  # 产物落地目录（内容存储层）
-    max_concurrent_tasks: int = 3  # 任务并发度（任务队列）
+    max_concurrent_tasks: int = 3  # 任务并发度（预留，分布式队列扩展用）

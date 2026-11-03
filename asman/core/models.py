@@ -47,6 +47,7 @@ class TaskConfig:
     user_input: str = ""
     quality_threshold: float = 0.85
     max_retry: int = 3
+    max_backloops: int = 3  # 单乘客最大回环次数，超限标记 FAILED（死循环保护）
     timeout_per_task: int = 300
     params: Dict[str, Any] = field(default_factory=dict)
 

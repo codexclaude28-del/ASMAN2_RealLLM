@@ -34,7 +34,6 @@ from .runtime.config import EngineConfig
 from .runtime.logging import get_logger, setup_logging
 from .runtime.metrics import Metrics
 from .runtime.storage import LocalFileStore
-from .runtime.queue import LocalTaskQueue
 
 logger = get_logger("asman.engine")
 
@@ -115,12 +114,12 @@ class MetroEngine:
         self.state_layer = StateLayer(self.config.state_db, dsn=self.config.dsn or None)
         self.skill_library = SkillLibrary(self.config.skill_db, dsn=self.config.dsn or None)
         self.skill_evolver = GEPAEvolver(self.skill_library)
-        self.moa_verifier = MoAAggregator(judge=self.judge, num_verifiers=1)
+        self.moa_verifier = MoAAggregator(judge=self.judge,
+                                          num_verifiers=self.config.moa_verifiers)
         self.three_tier_loop = ThreeTierLoop(self)
         self.convergence = ConvergenceEngine(None, self.occ)
         self.artifact_store = LocalFileStore(self.config.artifact_dir)
         self.deliverer = AutoDeliverer(self.metrics, self.artifact_store)
-        self.task_queue = LocalTaskQueue(self.config.max_concurrent_tasks)  # 预留分布式队列扩展点
 
         # 自愈 + 复盘（真正启动）
         self.self_healing = SelfHealingScheduler(self.network, self.occ, self.dispatcher)
@@ -157,6 +156,11 @@ class MetroEngine:
                 s.hermes_bridge = self.hermes_bridge
                 s.metrics = self.metrics
                 s.artifact_store = self.artifact_store
+                s.self_healing = self.self_healing
+                # 注册 Agent 到自愈调度器（站点处理路径上报心跳）
+                if s.agent is not None:
+                    self.self_healing.register_agent(
+                        s.station_id, getattr(s.agent, 'capability', 'general'))
 
     def reload_network(self, network_dict: Dict, profiles_dict: Dict) -> tuple:
         """保存新拓扑配置并热重载。返回 (成功, 消息)。"""
@@ -211,6 +215,10 @@ class MetroEngine:
                 s.hermes_bridge = self.hermes_bridge
                 s.metrics = self.metrics
                 s.artifact_store = self.artifact_store
+                s.self_healing = self.self_healing
+                if s.agent is not None:
+                    self.self_healing.register_agent(
+                        s.station_id, getattr(s.agent, 'capability', 'general'))
 
         # 6. 重启后台任务
         if was_running:
@@ -233,6 +241,11 @@ class MetroEngine:
             await self.build_network()
 
         config = await self.bootstrapper.bootstrap(user_input)
+        # 阈值单源化：ticket.config.quality_threshold 为站点质检的权威来源；
+        # bootstrapper 未显式设置时，用 JudgeConfig.threshold 作为任务默认
+        _default_qt = TaskConfig.__dataclass_fields__["quality_threshold"].default
+        if config.quality_threshold == _default_qt and self.config.judge.threshold != _default_qt:
+            config.quality_threshold = self.config.judge.threshold
         itinerary = self.network.plan_itinerary(self.network_config)
         origin, destinations, transfer_hubs = self._derive_ticket(itinerary)
 
